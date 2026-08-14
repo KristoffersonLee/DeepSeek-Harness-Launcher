@@ -1,0 +1,31 @@
+# 构建产物 / Build artifacts
+*.exe
+*.old
+*.old2
+*.old3
+*.old4
+selftest.log
+setup.log
+setup.detect.log
+wv2-smoke.*
+
+# 根目录的 WebView2 运行库副本（由 build.ps1 从 lib\ 拷贝，入库以 lib\ 为准）
+/Microsoft.Web.WebView2.Core.dll
+/Microsoft.Web.WebView2.WinForms.dll
+/WebView2Loader.dll
+
+# 运行时数据 / Runtime data
+webview2-profile/
+edge-profile/
+
+# 编辑器与系统 / Editor & OS
+.vs/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
+
+# Node
+node_modules/
+npm-debug.log*
