@@ -18,6 +18,17 @@ A Windows desktop launcher for **DeepSeek Harness**: double-click to automatical
 
 # 中文说明
 
+## 目录
+- [简介](#简介)
+- [功能特性](#功能特性)
+- [安装](#安装)
+- [使用](#使用)
+- [环境要求](#环境要求)
+- [从源码构建](#从源码构建)
+- [卸载](#卸载)
+- [目录结构](#目录结构)
+- [许可证](#许可证)
+
 ## 简介
 
 DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通常需要在浏览器中打开并忍受浏览器的内存开销与干扰。本启动器把 Harness 包装成一个标准桌面应用：
@@ -99,6 +110,17 @@ README.md / LICENSE                    本文件与许可证
 ---
 
 # English
+
+## Table of Contents
+- [Introduction](#introduction)
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Prerequisites](#prerequisites)
+- [Building from Source](#building-from-source)
+- [Uninstall](#uninstall)
+- [Repository Structure](#repository-structure)
+- [License](#license)
 
 ## Introduction
 
