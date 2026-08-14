@@ -6,6 +6,12 @@ A Windows desktop launcher for **DeepSeek Harness**: double-click to automatical
 
 **作者 / Author: [KristoffersonLee](https://github.com/)** · v1.0.0
 
+> ⚠️ **重要说明 / Important Notice**
+>
+> 本工具基于 **DeepSeek Harness 官方预览版** 构建。官方预览版仍处于快速迭代阶段，未来可能发布**破坏性更新**（包括端口 / 协议 / 接口、配置格式、工作目录结构等变化），届时本启动器可能无法兼容，**本项目也可能随之停止维护**。请知悉后再决定是否使用。
+>
+> This launcher is built on top of the **official preview release of DeepSeek Harness**. The official preview is still evolving rapidly and may introduce **breaking changes** in the future (including port / protocol / interface, config format, working-directory layout, etc.). In that case this launcher may become incompatible, and **this project may be discontinued**. Please be aware of this before using it.
+
 **[中文说明](#中文说明) | [English](#english)**
 
 ---
