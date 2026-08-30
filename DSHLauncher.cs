@@ -496,7 +496,7 @@ namespace DSHLauncher
         private System.Collections.Generic.List<string> logBuffer = new System.Collections.Generic.List<string>();
         private const int LogBufferMax = 800;                              // 内存日志缓冲上限（行，超出丢最旧）
         private bool exitConfirmed = false;          // 内嵌窗口关闭并退出（已确认）
-        private bool exitKillService = true;         // 退出时是否同时停止服务
+        private bool exitKillService = false;        // 退出时是否同时停止服务（默认否：退出保留服务，网页端不中断）
 
         private const int StartupTimeoutMs = 120000; // 启动超时（毫秒）：120 秒未就绪则停止并复位
         private const int ProbeIntervalMs = 1500;    // 就绪探测最小间隔（毫秒），防止 UI 线程频繁阻塞
@@ -1477,8 +1477,17 @@ namespace DSHLauncher
             }
             else if (forceExit && (serverRunning || extRunning))
             {
-                if (serverRunning) { try { Engine.KillProcessTree(server); killedAny = true; } catch { } }
-                if (extRunning) { try { Engine.KillProcessTree(externalPid); killedAny = true; } catch { } }
+                // 托盘「退出」：默认保留服务后台运行（网页端不中断），下次打开自动识别接管；
+                // 如需退出时停止，先用托盘「停止服务」，或在设置中关闭窗口时选择“是”。
+                if (exitKillService)
+                {
+                    if (serverRunning) { try { Engine.KillProcessTree(server); killedAny = true; } catch { } }
+                    if (extRunning) { try { Engine.KillProcessTree(externalPid); killedAny = true; } catch { } }
+                }
+                else
+                {
+                    Log("服务保持后台运行，下次打开本程序会自动识别并接管。");
+                }
             }
             // 退出前短暂等待端口释放，避免立刻重新启动时提示“端口被占用”
             if (killedAny)

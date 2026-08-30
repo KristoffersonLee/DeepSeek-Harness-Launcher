@@ -183,6 +183,7 @@ dsh --profile web --dump-config
 | 2026-08-30（补） | 修复会话编码不匹配崩溃：0.1.1-rc.2 的 `dsh-session-persistence-jsonl` 后端默认 `compression: zstd`，某会话目录混含明文 `session.jsonl`（188B header 残片）与 `session.jsonl.zstd`（436KB 完整会话）致 `encodingMismatch` 启动即崩（退出码 1）；删明文残片、备份移出 `.dsh`、统一 root 为 zstd；`dsh web` 启动验证监听 3080 无 `encodingMismatch` | ✅ 修复并写入手册第八节（与 rc.7/rc.8 事故无关，勿重装） |
 | 2026-08-30（补2） | 流程变更：升级/维护不再依赖一键脚本 `update-dsh.ps1`（**已删除**）；清除根目录无用文件（`update-dsh.ps1`、`dsh-session-encoding-fix.zip`、`.workbuddy\`）；`.gitignore` 增加 `.workbuddy/`；手册第三节改为「一句话触发 Agent 按手册执行」 | ✅ 目录与手册全面一致；下次更新只需一句话 |
 | 2026-08-31 | dsh 0.1.1-rc.2 → **0.1.2-alpha.2**（npm `alpha` 标签，08-30 上架）；按第三节流程安装 + 全面核验 PASS（koffi 3.1.6 / node-pty / 插件树 / 模型目录与「一补」一致 / 会话 zstd 默认一致）；**破坏性变更：dsh web 强制一次性 token 认证**（无 token 401）→ DSHLauncher v1.0.0 内嵌窗 401，启动器适配（捕获 `dsh web: …/?token=` 并导航，见第九节），重建 exe 正式名替换（旧版备份 `DSHLauncher.exe.old`） | ✅ 升级完成，重启启动器后内嵌窗正常 |
+| 2026-08-31（补） | 启动器行为修复：托盘「退出」不再无条件停止 dsh web（`exitKillService` 默认改 false），退出后服务保留、网页端不中断；下次打开自动接管（依赖 30 天认证 cookie）；停止服务走托盘「停止服务」或关闭窗口选“是” | ✅ 编译替换完成，重启启动器生效 |
 
 ## 七、rc.8 官方发布要点（与本机相关）
 
@@ -250,4 +251,6 @@ DSHLauncher 内嵌窗口（WebView2）显示 `dsh web authentication required; r
 - 重启启动器后内嵌窗正常显示 Harness。
 
 ### 说明（服务生命周期）
-启动器退出会同时停止其拉起的 dsh web（托盘设置可改「退出时是否同时停止服务」）；点 ✕ 最小化到托盘则服务常驻、网页端不中断。
+- 启动器退出**默认保留 dsh web 后台运行**（网页端不中断；2026-08-31 修复：托盘「退出」不再无条件停止服务，下次打开自动识别接管）。如需退出时停止：先托盘「停止服务」，或在关闭窗口提示中选择“是”。
+- 点 ✕ 最小化到托盘则程序与服务继续常驻。
+- 重新接管依赖浏览器会话 cookie（0.1.2-alpha 认证 cookie 有效期默认 30 天）；若长时间未开导致 cookie 过期返回 401，重启一次服务即可。
