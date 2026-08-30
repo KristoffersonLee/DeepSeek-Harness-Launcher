@@ -100,6 +100,7 @@ build.ps1 / build-setup.ps1            构建脚本（系统自带 csc，零依�
 make-icon.ps1 / app.ico / assets/      图标生成与资源（官方 DeepSeek 鲸鱼 LOGO）
 lib/                                   WebView2 SDK 官方 DLL（MIT 许可）
 selftest.ps1                           自检脚本
+DSH-升级维护手册.md                    升级与维护手册（通用版，随发布；见「帮助 → 使用文档」同目录）
 README.md / LICENSE                    本文件与许可证
 ```
 
@@ -193,6 +194,7 @@ build.ps1 / build-setup.ps1            build scripts (system csc, zero-dependenc
 make-icon.ps1 / app.ico / assets/      icon generation & assets (official DeepSeek whale logo)
 lib/                                   official WebView2 SDK DLLs (MIT licensed)
 selftest.ps1                           self-test script
+DSH-升级维护手册.md                    upgrade & maintenance manual (generic, shipped with releases)
 README.md / LICENSE                    this file and the license
 ```
 
