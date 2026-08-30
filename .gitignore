@@ -18,6 +18,9 @@ wv2-smoke.*
 webview2-profile/
 edge-profile/
 
+# WorkBuddy 等工具运行时目录（会按需重建，不入库）
+.workbuddy/
+
 # 编辑器与系统 / Editor & OS
 .vs/
 .vscode/
