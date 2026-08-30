@@ -489,6 +489,7 @@ namespace DSHLauncher
         private volatile bool probeReady = false;    // 异步就绪探测最近一次结果
         internal bool AppExiting = false;            // 程序真正退出中（用于内嵌窗口放行关闭）
         private HarnessWindow embedded = null;       // 内嵌 Harness 窗口（WebView2）
+        private string AuthenticatedUrl = null;      // dsh web 输出的一次性 token URL（0.1.2-alpha 起认证必需；旧版本为 null 回退普通地址）
         private SettingsForm settingsForm = null;    // 设置窗口（替代原启动器面板）
         internal event Action<string> LogLine;       // 日志行事件（设置窗口实时显示）
         private readonly object logLock = new object();                    // 日志缓冲锁
@@ -749,7 +750,27 @@ namespace DSHLauncher
 
         private void OnServerOutput(object sender, DataReceivedEventArgs e)
         {
-            if (!string.IsNullOrEmpty(e.Data)) Log("  " + Engine.Sanitize(e.Data));
+            if (string.IsNullOrEmpty(e.Data)) return;
+            Log("  " + Engine.Sanitize(e.Data));
+            // 0.1.2-alpha 起 dsh web 打印带一次性 token 的认证 URL（形如 dsh web: http://127.0.0.1:3080/?token=...），
+            // 内嵌窗口必须导航到该地址才能通过认证；旧版本无此输出时保持普通地址。
+            try
+            {
+                string line = e.Data.Trim();
+                int idx = line.IndexOf("dsh web: http", StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0)
+                {
+                    string url = line.Substring(idx + "dsh web: ".Length).Trim();
+                    int lan = url.IndexOf(" (LAN: ", StringComparison.OrdinalIgnoreCase);
+                    if (lan >= 0) url = url.Substring(0, lan);
+                    if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                        || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        AuthenticatedUrl = url;
+                    }
+                }
+            }
+            catch { } // 解析失败不影响日志
         }
 
         // 状态文本（供托盘悬浮文字使用）
@@ -1190,7 +1211,9 @@ namespace DSHLauncher
                 Log("服务未运行，请先点击“一键启动”。");
                 return;
             }
-            string url = "http://127.0.0.1:" + port + "/";
+            string url = !string.IsNullOrEmpty(AuthenticatedUrl)
+                ? AuthenticatedUrl
+                : "http://127.0.0.1:" + port + "/";
             try
             {
                 // 固定内嵌模式：WebView2 显示 Harness，无需浏览器（不可用时自动回退 Edge）

@@ -1,6 +1,6 @@
 # DeepSeek Harness Launcher 升级与维护手册
 
-> 本机核对日期：2026-08-22（dsh 升级至 0.1.1-rc.2 后更新）；2026-08-30 复核：npm 渠道最新仍为 0.1.1-rc.2（latest = next）；GitHub 官方发布页已于 08-27 发布 v0.1.2-alpha.1（alpha 预发布，**尚未上架 npm**），决策：暂不升级；Agent 与导入模型 API 引用与「一补」节记录全部一致；2026-08-30（晚）：升级/维护改为一句话触发 Agent 按本手册执行，一键脚本 `update-dsh.ps1` 已移除
+> 本机核对日期：2026-08-22（dsh 升级至 0.1.1-rc.2 后更新）；2026-08-30 复核：npm latest/next = 0.1.1-rc.2、GitHub 发 v0.1.2-alpha.1（当时未上架 npm，决策暂缓）；2026-08-31：npm 上架 0.1.2-alpha.2 → 升级 dsh 并适配启动器 token 认证（见第九节）；升级/维护为一句话触发 Agent 按本手册执行（一键脚本已移除）
 > 目的：记录正确的升级/验证/修复方法，避免重蹈「升级后启动器崩溃」事故。
 > 已记录事故：① 2026-08-19 rc.7 模块缺失（js-yaml/commander 文件缺失）；② 2026-08-20 rc.8 koffi 原生二进制错位（Mismatched native Koffi modules）。
 
@@ -11,15 +11,15 @@
 | Node.js | v26.7.0（官方最新） | `C:\Program Files\nodejs` | ✅ |
 | npm | 12.0.2（官方 latest） | 全局前缀 `C:\Users\20183\AppData\Roaming\npm` | ✅ |
 | pnpm | 11.22.0（官方 latest） | 全局前缀同上（`dsh plugin` 必需） | ✅ |
-| @deepseek-ai/dsh | **0.1.1-rc.2**（registry next = latest，均为 0.1.1-rc.2） | `Roaming\npm\node_modules\@deepseek-ai\dsh` | ✅ 升级后核验通过（koffi 3.1.6 / 插件树 514 行） |
+| @deepseek-ai/dsh | **0.1.2-alpha.2**（npm `alpha` 标签；latest/next 仍为 0.1.1-rc.2） | `Roaming\npm\node_modules\@deepseek-ai\dsh` | ✅ 2026-08-31 升级核验通过（koffi 3.1.6 / node-pty / 插件树 / 模型目录一致） |
 | Git | 2.55.0.4（winget 无更新） | WinGet MinGit | ✅ |
 | Python | 3.13.15（3.13 系最新补丁） | `C:\Users\20183\Local\Programs\Python\Python313` | ✅ |
-| DSHLauncher | v1.0.0（本地 git 与 origin/main 同步） | `D:\DSHLauncher` | ✅ |
+| DSHLauncher | v1.0.0（本地 git 与 origin/main 同步；2026-08-31 适配 dsh 0.1.2-alpha 的 token 认证，见第九节） | `D:\DSHLauncher` | ✅ |
 
-> ⚠️ 安装/升级必须显式写版本号（2026-08-22 起 next = latest = 0.1.1-rc.2；标签可能随发布变化）：
-> `npm install -g @deepseek-ai/dsh@0.1.1-rc.2`，避免装回旧标签指向的版本。
+> ⚠️ 安装/升级必须显式写版本号（标签可能随发布变化）：
+> `npm install -g @deepseek-ai/dsh@0.1.2-alpha.2`（或用 `npm view @deepseek-ai/dsh dist-tags` 确认当前标签），避免装回旧标签指向的版本。
 >
-> 📌 版本跟踪（2026-08-30）：GitHub 官方发布页最新为 **v0.1.2-alpha.1**（08-27 预发布，无安装包资产，**未上架 npm**，npm 三源 registry/npmmirror/jsdelivr 均无）；npm 渠道最新仍为 0.1.1-rc.2。升级前先 `npm view @deepseek-ai/dsh dist-tags` 确认上架情况；上架后一句话触发 Agent 升级（按第三节流程）。注意 0.1.2-alpha.1 含破坏性变更（移除旧版 APIProxy → @Remote 网关；pi-ai 模型支持更新 + vLLM 思考预算；统一 dsh Profile 启动），升级前需评估对 DSHLauncher 与 LongCat 配置的影响。
+> 📌 版本跟踪（2026-08-31）：npm 渠道 `latest`/`next` = 0.1.1-rc.2，`alpha` = **0.1.2-alpha.2**（08-30 GitHub 发布并上架 npm，本机已升级）。**破坏性变更已确认**：dsh web **强制一次性 token 认证**（`/?token=…`，无关闭开关）→ DSHLauncher 已适配（见第九节）；另含 APIProxy 移除 → @Remote 网关、pi-ai 模型支持更新 + vLLM 思考预算、统一 dsh Profile 启动。升级前先 `npm view @deepseek-ai/dsh dist-tags` 确认上架情况；一句话触发 Agent 升级（按第三节流程）。
 
 ## 一补、Agent 与模型 API 引用（2026-08-22 更新）
 
@@ -47,6 +47,7 @@
 > - `deepseek-v4-flash-vision-exp` 为实验模型，官方 `/list-models` 不列出，但设置 `model='deepseek-v4-flash-vision-exp'` 可直接调用（官方新闻 news260821 确认）。
 > - 三个 DeepSeek 模型的目录由 `dsh-llm-deepseek`（0.1.1-rc.2）官方默认提供；settings.yaml **未覆盖任何模型配置**（保持官方注册含 imagePixelBudget/imageMaxBytes，maxTokens 为 DSH 默认 256K）。
 > - 峰值时段（周一至五 9:00-12:00、14:00-18:00）价格为空闲时段 2 倍。
+> - 2026-08-31 于 0.1.2-alpha.2 复核：deepseek 模型目录（flash/pro/vision-exp）、baseURL、1M/256K、LongCat 配置、会话 zstd 默认均与本节一致，**无变化**。
 
 ## 二、最重要的防坑规则（两次事故的教训）
 
@@ -168,6 +169,7 @@ dsh --profile web --dump-config
 
 | 2026-08-30（补） | 修复会话编码不匹配崩溃：0.1.1-rc.2 的 `dsh-session-persistence-jsonl` 后端默认 `compression: zstd`，某会话目录混含明文 `session.jsonl`（188B header 残片）与 `session.jsonl.zstd`（436KB 完整会话）致 `encodingMismatch` 启动即崩（退出码 1）；删明文残片、备份移出 `.dsh`、统一 root 为 zstd；`dsh web` 启动验证监听 3080 无 `encodingMismatch` | ✅ 修复并写入手册第八节（与 rc.7/rc.8 事故无关，勿重装） |
 | 2026-08-30（补2） | 流程变更：升级/维护不再依赖一键脚本 `update-dsh.ps1`（**已删除**）；清除根目录无用文件（`update-dsh.ps1`、`dsh-session-encoding-fix.zip`、`.workbuddy\`）；`.gitignore` 增加 `.workbuddy/`；手册第三节改为「一句话触发 Agent 按手册执行」 | ✅ 目录与手册全面一致；下次更新只需一句话 |
+| 2026-08-31 | dsh 0.1.1-rc.2 → **0.1.2-alpha.2**（npm `alpha` 标签，08-30 上架）；按第三节流程安装 + 全面核验 PASS（koffi 3.1.6 / node-pty / 插件树 / 模型目录与「一补」一致 / 会话 zstd 默认一致）；**破坏性变更：dsh web 强制一次性 token 认证**（无 token 401）→ DSHLauncher v1.0.0 内嵌窗 401，启动器适配（捕获 `dsh web: …/?token=` 并导航，见第九节），重建 exe 正式名替换（旧版备份 `DSHLauncher.exe.old`） | ✅ 升级完成，重启启动器后内嵌窗正常 |
 
 ## 七、rc.8 官方发布要点（与本机相关）
 
@@ -211,3 +213,28 @@ dsh 0.1.1-rc.2 的 `dsh-session-persistence-jsonl` 后端**默认 `compression: 
 
 ### 备选（本机不适用）
 若全部会话均为明文、想保留明文历史并改默认，可在 `C:\Users\20183\.dsh\profiles\web\cordis.patch.yml` 追加 `- id: session-persistence-jsonl / config: { compression: none }`，使后端读明文、新会话也写明文。但**本机已有 121 个 zstd 会话，改 none 反而会让这些 zstd 触发 mismatch**，故本机必须用"统一为 zstd"方案，不可用此备选。
+
+## 九、新增故障：0.1.2-alpha 起 dsh web 强制一次性 token 认证（启动器适配）
+
+> 发生日期：2026-08-31；环境 dsh 0.1.2-alpha.2。
+
+### 现象
+DSHLauncher 内嵌窗口（WebView2）显示 `dsh web authentication required; reopen the URL printed by dsh web`；直接访问 `http://127.0.0.1:3080/` 返回 **401**，带 `/?token=…` 返回 **200**。启动器日志可见 `dsh web: http://127.0.0.1:3080/?token=…`（每次启动 token 不同）。
+
+### 根因
+0.1.2-alpha 起 `dsh-client-connection` 对 Web 界面启用一次性 token 认证（browser-session 签名 cookie + 每次启动生成新 token），**无配置关闭开关**（`--trusted-host` 仅作用于 /api 浏览器信任围栏，与页面认证无关）。DSHLauncher v1.0.0 固定打开无 token 的 `http://127.0.0.1:3080/` → 401。
+
+### 修复（DSHLauncher 适配，2026-08-31）
+1. `DSHLauncher.cs` 三处改动：
+   - 新增字段 `AuthenticatedUrl`（默认 null）；
+   - `OnServerOutput`：捕获 dsh web 输出行 `dsh web: http…/?token=…`（去掉 ` (LAN: …)` 后缀）写入 `AuthenticatedUrl`；
+   - `OpenBrowser()`：优先使用 `AuthenticatedUrl` 导航，null 时回退普通地址（兼容旧版本）。
+2. 重建：`build.ps1`（**注意：文件为 UTF-8 无 BOM，须用 pwsh 7 执行，或 `csc /codepage:65001` 直接编译；Windows PowerShell 5.1 按 ANSI 误读中文会报语法错**）。
+3. 正式名替换：先备份 `DSHLauncher.exe.old` 再覆盖 `DSHLauncher.exe`；若正式名 exe 正被运行占用，可先重命名运行中 exe、拷入新文件（免杀进程）。
+
+### 验证
+- 带 token HTTP 200 / 无 token HTTP 401（符合预期）；
+- 重启启动器后内嵌窗正常显示 Harness。
+
+### 说明（服务生命周期）
+启动器退出会同时停止其拉起的 dsh web（托盘设置可改「退出时是否同时停止服务」）；点 ✕ 最小化到托盘则服务常驻、网页端不中断。
