@@ -49,6 +49,19 @@
 > - 峰值时段（周一至五 9:00-12:00、14:00-18:00）价格为空闲时段 2 倍。
 > - 2026-08-31 于 0.1.2-alpha.2 复核：deepseek 模型目录（flash/pro/vision-exp）、baseURL、1M/256K、LongCat 配置、会话 zstd 默认均与本节一致，**无变化**。
 
+### 凭据 / API Key 引用（2026-08-31 更新）
+
+> 密钥本体存放于 `C:\Users\20183\.dsh\.credentials.yaml`，**不入库、不入手册**；本节仅记录引用名与用途，供核对。
+
+| API Key 环境变量 | 用途 / 提供方 | 备注 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | `deepseek-official`（对话默认模型 + web 搜索；`llm-deepseek`、`web-search-deepseek`） | 必需 |
+| `LONGCAT_API_KEY` | `longcat`（pi-ai 自定义 provider，LongCat-2.0） | 必需（使用 LongCat 时） |
+| `ZHIPU_API_KEY` | （预留） | ⚠️ 无对应 provider 配置，未使用；如不再需要可在 GUI 模型设置移除 |
+| `AGNES_API_KEY` | （预留） | ⚠️ 同上 |
+
+> 说明：升级 dsh 或更换密钥只改 `.credentials.yaml`（及 GUI 模型设置），`settings.yaml` 与本节引用名不变；2026-08-31 于 0.1.2-alpha.2 复核各引用一致。
+
 ## 二、最重要的防坑规则（两次事故的教训）
 
 1. **全局 npm 前缀必须是 `C:\Users\20183\AppData\Roaming\npm`**。
