@@ -25,7 +25,7 @@ namespace DSHSetup
     internal static class Program
     {
         public const string AppName = "DeepSeek Harness Launcher";
-        public const string AppVersion = "1.0.0";
+        public const string AppVersion = "2.0.0";
         public const string InstallSubDir = "DSHLauncher";
         public const string ShortcutName = "DeepSeek Harness Launcher";
 
@@ -482,6 +482,8 @@ namespace DSHSetup
                 ExtractResource("Microsoft.Web.WebView2.WinForms.dll",
                     Path.Combine(dir, "Microsoft.Web.WebView2.WinForms.dll"));
                 ExtractResource("WebView2Loader.dll", Path.Combine(dir, "WebView2Loader.dll"));
+                // 随安装部署唯一文档 README.md（含升级与维护手册）
+                ExtractResource("README.md", Path.Combine(dir, "README.md"));
             }
             catch (IOException ex)
             {
@@ -804,7 +806,7 @@ namespace DSHSetup
             lblNote.Text =
                 "· 安装为当前用户，无需管理员权限；\n" +
                 "· 已安装过时选择同一目录即为升级，设置文件会自动保留；\n" +
-                "· 安装内容：DSHLauncher.exe、WebView2 运行库、app.ico、uninstall.cmd；\n" +
+                "· 安装内容：DSHLauncher.exe、WebView2 运行库、app.ico、README.md（升级与维护手册）、uninstall.cmd；\n" +
                 "· 桌面图标与启动选项在最后一步选择。";
 
             pages[2].Controls.Add(lblDir);
@@ -866,7 +868,8 @@ namespace DSHSetup
             tip.ForeColor = Color.FromArgb(110, 110, 110);
             tip.Text =
                 "之后想再次打开：双击桌面图标即可。\n" +
-                "想卸载：运行安装目录里的 uninstall.cmd，或通过“设置→应用”卸载。";
+                "想卸载：运行安装目录里的 uninstall.cmd，或通过“设置→应用”卸载。\n" +
+                "升级与维护：参见安装目录里的 README.md（升级与维护手册）。";
 
             pages[4].Controls.Add(lblDone);
             pages[4].Controls.Add(chkLaunch);

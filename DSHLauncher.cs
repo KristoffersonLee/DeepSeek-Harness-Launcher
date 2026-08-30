@@ -35,7 +35,7 @@ namespace DSHLauncher
     internal static class Program
     {
         public const string AppName = "DeepSeek Harness Launcher";
-        public const string AppVersion = "1.0.0";
+        public const string AppVersion = "2.0.0";
         public static bool OpenGuideOnStart = false;
 
         [STAThread]
