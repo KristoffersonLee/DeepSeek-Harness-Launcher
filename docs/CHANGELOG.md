@@ -23,6 +23,8 @@
   - UTF-8 process-output fix: no more garbled Chinese in the log (explicit UTF-8 decoding for dsh web & gateway)
 - **dsh 升级至 0.1.2-alpha.3**：事件/API/token 契约无变更，手机 UI 与网关零适配
   - dsh upgraded to 0.1.2-alpha.3: no event/API/token contract changes — mobile UI and gateway need no adaptation
+- **最终审查修复**：401 重试不再丢失响应、改 PIN 后网关强制重启（旧 PIN/Cookie 立即失效）、大纲"加载更早"可达且节点去重、SSE 长静默不再被超时掐断、速率限制数值校验、日志脱敏全覆盖等 18 项
+  - Final audit fixes: 401 retry no longer loses the response, gateway hard-restart on PIN change (old PIN/cookies invalidated immediately), outline load-earlier reachable with dedup, SSE no longer cut by idle timeout, rate-limit value validation, full log redaction coverage, and more (18 items)
 - **文档重构**：README 精简为双语主文档，升级维护手册拆分至 docs/MAINTENANCE.zh.md / MAINTENANCE.en.md
   - Docs rework: README slimmed to a bilingual main doc; the maintenance manual moved to docs/MAINTENANCE.zh.md / MAINTENANCE.en.md
 
