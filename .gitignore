@@ -14,9 +14,12 @@ wv2-smoke.*
 /Microsoft.Web.WebView2.WinForms.dll
 /WebView2Loader.dll
 
-# 运行时数据 / Runtime data
-webview2-profile/
-edge-profile/
+# 敏感配置：仓库根与 %APPDATA% 的 .env 可存放 DSH_LAN_PIN 等凭据，禁止入库
+.env
+.env.*
+
+# 开发期误产物（如 PowerShell 重定向 `> 0` 生成的 “0” 文件）
+0
 
 # WorkBuddy 等工具运行时目录（会按需重建，不入库）
 .workbuddy/

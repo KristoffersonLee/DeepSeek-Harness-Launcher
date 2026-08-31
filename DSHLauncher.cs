@@ -18,6 +18,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using System.Reflection;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -35,7 +36,7 @@ namespace DSHLauncher
     internal static class Program
     {
         public const string AppName = "DeepSeek Harness Launcher";
-        public const string AppVersion = "2.0.0";
+        public const string AppVersion = "3.0.0";
         public static bool OpenGuideOnStart = false;
 
         [STAThread]
@@ -66,6 +67,8 @@ namespace DSHLauncher
                     return 0;
                 }
                 LauncherForm form = new LauncherForm();
+                // 强制创建窗口句柄：此后 BeginInvoke 必定可用，避免等待线程在句柄创建前收到唤起信号而异常退出
+                GC.KeepAlive(form.Handle);
                 Thread waiter = new Thread(delegate()
                 {
                     try
@@ -94,10 +97,11 @@ namespace DSHLauncher
     internal class Settings
     {
         public int Port = 3080;
-        public bool AutoStart = true; // 打开本程序时自动启动服务
-        public bool AutoOpen = true;  // 服务就绪后自动打开浏览器
+        // 行为固定：打开自动启动服务、就绪自动打开内嵌窗口（原 AutoStart/AutoOpen/LiteBrowser 死设置已移除）
         public bool TrayOnClose = true; // 点叉时最小化到托盘（后台运行）
-        public bool LiteBrowser = true; // 用内嵌窗口（WebView2）打开界面，无需浏览器
+        public bool LanEnabled = false; // 局域网共享开关（默认关闭，显式开启）
+        public int LanPort = 3081;      // 局域网网关端口（默认 3080 的下一位）
+        public string LanPin = "";      // 自定义访问 PIN（留空则自动生成，见 lan-pin.txt）
         public string NodePath = "";  // 可选: 手动指定 node.exe
         public string WorkDir = "";   // dsh 进程工作目录（决定 Harness 的 workspace）
 
@@ -138,12 +142,7 @@ namespace DSHLauncher
                             int p;
                             if (int.TryParse(val, out p) && p >= 1 && p <= 65535) Port = p;
                             break;
-                        case "autostart":
-                            AutoStart = ParseBool(val, AutoStart);
-                            break;
-                        case "autoopen":
-                            AutoOpen = ParseBool(val, AutoOpen);
-                            break;
+                        // 兼容旧版设置文件：autostart/autoopen/litebrowser 已无对应行为，忽略读取
                         case "nodepath":
                             NodePath = val;
                             break;
@@ -153,8 +152,15 @@ namespace DSHLauncher
                         case "trayonclose":
                             TrayOnClose = ParseBool(val, TrayOnClose);
                             break;
-                        case "litebrowser":
-                            LiteBrowser = ParseBool(val, LiteBrowser);
+                        case "lanenabled":
+                            LanEnabled = ParseBool(val, LanEnabled);
+                            break;
+                        case "lanport":
+                            int lp;
+                            if (int.TryParse(val, out lp) && lp >= 1 && lp <= 65535) LanPort = lp;
+                            break;
+                        case "lanpin":
+                            LanPin = val;
                             break;
                     }
                 }
@@ -180,12 +186,12 @@ namespace DSHLauncher
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine("# " + Program.AppName + " settings");
                 sb.AppendLine("port=" + Port);
-                sb.AppendLine("autoStart=" + AutoStart.ToString().ToLowerInvariant());
-                sb.AppendLine("autoOpen=" + AutoOpen.ToString().ToLowerInvariant());
                 sb.AppendLine("nodePath=" + NodePath);
                 sb.AppendLine("workDir=" + WorkDir);
                 sb.AppendLine("trayOnClose=" + TrayOnClose.ToString().ToLowerInvariant());
-                sb.AppendLine("liteBrowser=" + LiteBrowser.ToString().ToLowerInvariant());
+                sb.AppendLine("lanEnabled=" + LanEnabled.ToString().ToLowerInvariant());
+                sb.AppendLine("lanPort=" + LanPort);
+                sb.AppendLine("lanPin=" + LanPin);
                 File.WriteAllText(FilePath, sb.ToString(), new UTF8Encoding(false));
             }
             catch (Exception ex)
@@ -257,7 +263,7 @@ namespace DSHLauncher
 
             if (NodePath == null)
             {
-                DetectError = "未找到 node.exe。请在“Node…”中手动指定 node.exe 的完整路径。";
+                DetectError = "未找到 node.exe。请安装 Node.js，或在设置文件 settings.ini 中手动指定 nodePath。";
                 return;
             }
 
@@ -279,7 +285,7 @@ namespace DSHLauncher
             }
         }
 
-        public static Process StartServer(int port, string workDir)
+        public static Process StartServer(int port, string workDir, bool lanEnabled = false)
         {
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = NodePath;
@@ -292,6 +298,12 @@ namespace DSHLauncher
                 psi.WorkingDirectory = workDir;
             else
                 psi.WorkingDirectory = Path.GetDirectoryName(BinJs);
+            if (lanEnabled)
+            {
+                // 若底层使用 Ollama 本地推理：允许局域网内的 Harness 网关调用模型接口
+                psi.EnvironmentVariables["OLLAMA_HOST"] = "0.0.0.0";
+                psi.EnvironmentVariables["OLLAMA_ORIGINS"] = "*";
+            }
             return Process.Start(psi);
         }
 
@@ -360,8 +372,13 @@ namespace DSHLauncher
                 psi.RedirectStandardError = true;
                 using (Process p = Process.Start(psi))
                 {
+                    // 先等待退出再读输出，避免 ReadToEnd 无限阻塞（netstat 异常挂起时 5 秒超时兜底）
+                    if (!p.WaitForExit(5000))
+                    {
+                        try { p.Kill(); } catch { }
+                        return 0;
+                    }
                     string outp = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(5000);
                     string marker = ":" + port + " ";
                     foreach (string line in outp.Split('\n'))
                     {
@@ -438,7 +455,10 @@ namespace DSHLauncher
             catch (Exception)
             {
             }
-            try { Process.GetProcessById(pid).Kill(); }
+            try
+            {
+                using (Process p2 = Process.GetProcessById(pid)) { if (p2 != null) p2.Kill(); }
+            }
             catch { }
         }
 
@@ -463,6 +483,17 @@ namespace DSHLauncher
         {
             if (string.IsNullOrEmpty(s)) return "";
             return Regex.Replace(s, "\u001b\\[[0-9;]*m", "");
+        }
+
+        // 日志脱敏：剥离 dsh 一次性认证 token 与局域网 PIN，避免凭据明文落盘 launcher.log
+        public static string RedactSecrets(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            // ?token=xxx 或 &token=xxx（URL 查询参数形式）
+            s = Regex.Replace(s, "[?&]token=[^&\\s\"']+", "?token=***", RegexOptions.IgnoreCase);
+            // “访问 PIN：123456” / “PIN: 123456”（中文/英文冒号均可）
+            s = Regex.Replace(s, "(?i)(访问\\s*)?pin\\s*[：:]\\s*[^\\s，。；）)\"']+", "$1PIN: ***");
+            return s;
         }
     }
 
@@ -489,8 +520,14 @@ namespace DSHLauncher
         private volatile bool probeReady = false;    // 异步就绪探测最近一次结果
         internal bool AppExiting = false;            // 程序真正退出中（用于内嵌窗口放行关闭）
         private HarnessWindow embedded = null;       // 内嵌 Harness 窗口（WebView2）
-        private string AuthenticatedUrl = null;      // dsh web 输出的一次性 token URL（0.1.2-alpha 起认证必需；旧版本为 null 回退普通地址）
+        private volatile string AuthenticatedUrl = null; // dsh web 输出的一次性 token URL（0.1.2-alpha 起认证必需；旧版本为 null 回退普通地址；跨线程读写需 volatile）
         private SettingsForm settingsForm = null;    // 设置窗口（替代原启动器面板）
+        private Process lanGateway = null;           // 局域网网关进程（node lan-gateway.mjs）
+        private string lanIp = "";                 // 当前绑定的局域网 IP
+        private string lanAdapter = "";            // 网卡名（面板显示）
+        private bool lanWireless = false;            // 是否无线网卡
+        private string lanPlainUrl = "";           // 不含 token 的局域网地址（二维码/复制用）
+        private int lanExternalPid = 0;              // 已接管的外部网关 PID
         internal event Action<string> LogLine;       // 日志行事件（设置窗口实时显示）
         private readonly object logLock = new object();                    // 日志缓冲锁
         private System.Collections.Generic.List<string> logBuffer = new System.Collections.Generic.List<string>();
@@ -580,7 +617,7 @@ namespace DSHLauncher
                 Log("配置已变更（端口/工作目录），正在重启服务…");
                 try { Engine.KillProcessTree(server); }
                 catch { }
-                server = null;
+                ReleaseServer();
                 serverReady = false;
                 starting = false;
                 StartServer();
@@ -588,6 +625,13 @@ namespace DSHLauncher
             else
             {
                 Log("设置已保存（端口 " + p + "）。");
+            }
+            // 端口变更且局域网已开启：先停旧网关（其 DSH_TARGET 仍指向旧端口），
+            // 服务就绪后 PollTick → MaybeStartLanGateway 会用新端口/新 token 自动重启网关
+            if (portChanged && settings.LanEnabled)
+            {
+                Log("局域网网关目标端口已变更，正在重启网关…");
+                StopLanGateway();
             }
             if (externalPid > 0 && portChanged)
             {
@@ -692,19 +736,22 @@ namespace DSHLauncher
                 FileInfo fi = new FileInfo(p);
                 if (fi.Length > 2 * 1024 * 1024)
                 {
-                    string all = File.ReadAllText(p, Encoding.UTF8);
-                    if (all.Length > 1000000)
+                    // 按字节裁剪（保留尾部约 1MB）：全中文日志的字符数远小于字节数，
+                    // 原“字符数 > 100 万”判断会导致中文日志永不裁剪、无限增长
+                    byte[] allBytes = File.ReadAllBytes(p);
+                    if (allBytes.Length > 1024 * 1024)
                     {
-                        File.WriteAllText(p, all.Substring(all.Length - 1000000), Encoding.UTF8);
+                        byte[] tail = new byte[1024 * 1024];
+                        Array.Copy(allBytes, allBytes.Length - tail.Length, tail, 0, tail.Length);
+                        string s = Encoding.UTF8.GetString(tail);
+                        // 丢弃解码产生的替换字符（U+FFFD），避免首字符被截半
+                        int bad = s.IndexOf('\uFFFD');
+                        if (bad >= 0 && bad < 2) s = s.Substring(bad + 1);
+                        File.WriteAllText(p, s, Encoding.UTF8);
                     }
                 }
             }
             catch { }
-        }
-
-        // 启动器面板永不显示，此方法保留为空实现（调用方无需改动）
-        private void HideLauncherOnOpen()
-        {
         }
 
         public void ShowWindow()
@@ -751,7 +798,8 @@ namespace DSHLauncher
         private void OnServerOutput(object sender, DataReceivedEventArgs e)
         {
             if (string.IsNullOrEmpty(e.Data)) return;
-            Log("  " + Engine.Sanitize(e.Data));
+            // 日志脱敏：dsh 输出可能含一次性 token URL，不能明文落盘
+            Log("  " + Engine.RedactSecrets(Engine.Sanitize(e.Data)));
             // 0.1.2-alpha 起 dsh web 打印带一次性 token 的认证 URL（形如 dsh web: http://127.0.0.1:3080/?token=...），
             // 内嵌窗口必须导航到该地址才能通过认证；旧版本无此输出时保持普通地址。
             try
@@ -767,6 +815,9 @@ namespace DSHLauncher
                         || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                     {
                         AuthenticatedUrl = url;
+                        // 局域网网关需要此启动令牌（dsh 重启后自动重新兑换）
+                        string tk = ExtractToken(url);
+                        if (tk.Length > 0) SaveLanToken(tk);
                     }
                 }
             }
@@ -796,6 +847,16 @@ namespace DSHLauncher
         }
 
 
+
+        // 释放服务进程对象并置空（进程已退出/已结束的场景；Dispose 只释放句柄，不杀进程）
+        private void ReleaseServer()
+        {
+            if (server != null)
+            {
+                try { server.Dispose(); } catch { }
+                server = null;
+            }
+        }
 
         // ------------------------- 轮询 -------------------------
         // HTTP 就绪探测限频：避免服务无响应时 UI 线程被同步超时反复阻塞（表现为界面卡死）
@@ -839,12 +900,16 @@ namespace DSHLauncher
                     int code = -1;
                     try { code = server.ExitCode; } catch { }
                     Log("服务进程已退出（退出码 " + code + "）。");
-                    server = null;
+                    ReleaseServer();
                     serverReady = false;
                     starting = false;
+                    StopLanGateway(); // 服务停止时同步关闭局域网入口
                     SetState(RunState.Stopped);
                     RevealLauncherOnError();
-                    if (!Visible)
+                    // 宿主窗体常驻隐藏（Visible 恒为 false），以是否有可见的内嵌窗口/设置窗口判断是否弹气泡
+                    bool anyWindowVisible = (embedded != null && !embedded.IsDisposed && embedded.Visible)
+                        || (settingsForm != null && !settingsForm.IsDisposed && settingsForm.Visible);
+                    if (!anyWindowVisible)
                     {
                         try
                         {
@@ -870,6 +935,7 @@ namespace DSHLauncher
                             autoRestartCount = 0;
                             Log("服务就绪 ✓ http://127.0.0.1:" + port + "/");
                             SetState(RunState.Running);
+                            MaybeStartLanGateway();
                             OpenBrowser(); // 固定：就绪后自动打开界面
                         }
                         else if ((DateTime.Now - serverStartTime).TotalMilliseconds > StartupTimeoutMs)
@@ -877,7 +943,7 @@ namespace DSHLauncher
                             // 进程存活但长时间未就绪：结束“无限启动中”的卡死状态
                             Log("启动超时：120 秒内服务未就绪，已停止并复位。请查看上方日志输出后重试。");
                             try { Engine.KillProcessTree(server); } catch { }
-                            server = null;
+                            ReleaseServer();
                             serverReady = false;
                             starting = false;
                             lostResponse = 0;
@@ -911,7 +977,7 @@ namespace DSHLauncher
                                 autoRestartCount++;
                                 Log("服务连续无响应约 30 秒，判定已挂起，正在自动重启（第 " + autoRestartCount + " 次）…");
                                 try { Engine.KillProcessTree(server); } catch { }
-                                server = null;
+                                ReleaseServer();
                                 serverReady = false;
                                 starting = false;
                                 lostResponse = 0;
@@ -920,13 +986,14 @@ namespace DSHLauncher
                             }
                             else
                             {
-                                Log("服务连续挂起且已自动重启 3 次仍未恢复，请检查工作目录/端口设置后点击“一键启动”重试。");
+                                Log("服务连续挂起且已自动重启 3 次仍未恢复，请检查工作目录/端口设置后点击托盘菜单“启动服务”重试。");
                                 try { Engine.KillProcessTree(server); } catch { }
-                                server = null;
+                                ReleaseServer();
                                 serverReady = false;
                                 starting = false;
                                 lostResponse = 0;
                                 autoRestartCount = 0;
+                                StopLanGateway(); // 服务已不可用，同步关闭局域网入口，避免手机端误以为仍可用
                                 SetState(RunState.Error);
                             }
                         }
@@ -961,13 +1028,14 @@ namespace DSHLauncher
                         if (isHarness)
                         {
                             externalPid = pid;
-                            Log("已接管端口 " + port + " 上的 DSH Harness（PID " + pid + "），点击“停止”可直接关闭。");
+                            Log("已接管端口 " + port + " 上的 DSH Harness（PID " + pid + "），托盘“停止服务”可直接关闭。");
                         }
                         else
                         {
                             Log("端口 " + port + " 上的进程无法确认是 DSH Harness，停止前需要人工确认。");
                         }
                     }
+                    MaybeStartLanGateway(); // 识别完成后才尝试启动局域网网关
                 }
                 else
                 {
@@ -982,7 +1050,7 @@ namespace DSHLauncher
                         if (isHarness)
                         {
                             Log("检测到端口 " + port + " 上有一个无响应的残留 DSH Harness（PID " + pid + "）。");
-                            Log("点击“一键启动”将自动结束该残留进程并重新启动服务。");
+                            Log("点击托盘菜单“启动服务”将自动结束该残留进程并重新启动服务。");
                         }
                         else
                         {
@@ -995,11 +1063,6 @@ namespace DSHLauncher
         }
 
         // ------------------------- 操作 -------------------------
-        private void OnStartClick(object sender, EventArgs e)
-        {
-            StartServer(true);
-        }
-
         private void StartServer()
         {
             StartServer(false);
@@ -1016,7 +1079,7 @@ namespace DSHLauncher
                 catch { exited = true; }
                 if (exited)
                 {
-                    server = null;
+                    ReleaseServer();
                     serverReady = false;
                     starting = false;
                     lostResponse = 0;
@@ -1074,10 +1137,21 @@ namespace DSHLauncher
                 }
             }
 
-            Engine.Resolve(settings);
-            if (Engine.NodePath == null || Engine.BinJs == null)
+            // Resolve 可能因目录无权限等抛异常（如 PATH 遍历、Directory.GetDirectories），必须保护，避免在 UI 线程崩溃
+            try
             {
-                Log("无法启动：" + Engine.DetectError.Replace("\n", " "));
+                Engine.Resolve(settings);
+                if (Engine.NodePath == null || Engine.BinJs == null)
+                {
+                    Log("无法启动：" + Engine.DetectError.Replace("\n", " "));
+                    SetState(RunState.Error);
+                    RevealLauncherOnError();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("无法解析环境：" + ex.Message);
                 SetState(RunState.Error);
                 RevealLauncherOnError();
                 return;
@@ -1085,7 +1159,7 @@ namespace DSHLauncher
 
             try
             {
-                server = Engine.StartServer(port, settings.WorkDir);
+                server = Engine.StartServer(port, settings.WorkDir, settings.LanEnabled);
                 starting = true;
                 serverReady = false;
                 probeReady = false; // 复位就绪探测结果，避免陈旧值误判新服务已就绪
@@ -1107,7 +1181,7 @@ namespace DSHLauncher
             }
             catch (Exception ex)
             {
-                server = null;
+                ReleaseServer();
                 starting = false;
                 Log("启动失败：" + ex.Message);
                 SetState(RunState.Error);
@@ -1130,7 +1204,7 @@ namespace DSHLauncher
                 catch { exited = true; }
                 if (exited)
                 {
-                    server = null;
+                    ReleaseServer();
                     serverReady = false;
                     starting = false;
                 }
@@ -1147,9 +1221,10 @@ namespace DSHLauncher
                     Log("停止时出错：" + ex.Message);
                 }
                 Log("服务已停止。");
-                server = null;
+                ReleaseServer();
                 serverReady = false;
                 starting = false;
+                StopLanGateway(); // 同步关闭局域网入口
                 SetState(RunState.Stopped);
                 return;
             }
@@ -1170,6 +1245,7 @@ namespace DSHLauncher
                 }
                 externalPid = 0;
                 adoptTried = false;
+                StopLanGateway(); // 同步关闭局域网入口
                 SetState(RunState.Stopped);
                 return;
             }
@@ -1197,6 +1273,612 @@ namespace DSHLauncher
             Log("没有正在运行的服务。");
         }
 
+        // ------------------------- 局域网共享（LAN） -------------------------
+        internal string UiLanPortText { get { return settings.LanPort.ToString(); } }
+        internal bool UiLanEnabled { get { return settings.LanEnabled; } }
+        internal string UiLanPin { get { return settings.LanPin; } }
+        internal string UiLanIp { get { return lanIp; } }
+        internal string UiLanAdapter { get { return lanAdapter; } }
+        internal bool UiLanWireless { get { return lanWireless; } }
+        internal string UiLanPlainUrl { get { return lanPlainUrl; } }
+        internal bool UiOllamaDetected { get { return LanAccess.IsOllamaInstalled(); } }
+
+        // 生效 PIN 的来源说明（环境变量/.env/lan-pin.txt 解析结果，供面板展示）
+        internal string UiLanPinSource
+        {
+            get
+            {
+                string src;
+                LanAccess.EffectivePin(out src);
+                // lan-pin.txt 可能存的是自定义 PIN 或自动生成 PIN：以 settings.LanPin 区分显示，
+                // 避免用户已自定义却显示“启动器自动生成”造成误导
+                if (settings.LanPin.Length > 0 && src == "启动器自动生成")
+                    return "自定义（lan-pin.txt）";
+                return src;
+            }
+        }
+
+        internal string UiLanStatus
+        {
+            get
+            {
+                if (!settings.LanEnabled) return "未开启";
+                if (lanGateway != null && !lanGateway.HasExited) return "运行中 · " + lanPlainUrl;
+                if (lanExternalPid > 0) return "运行中（已接管）· " + lanPlainUrl;
+                if (lanIp.Length == 0) return "未运行（未检测到活动网卡）";
+                return "未运行";
+            }
+        }
+
+        internal string UiFirewallStatus
+        {
+            get
+            {
+                if (!settings.LanEnabled) return "未配置（局域网未开启）";
+                try
+                {
+                    if (LanAccess.HasRule(settings.LanPort)) return "已配置（仅本地子网）";
+                }
+                catch { }
+                return "未配置（需要管理员权限）";
+            }
+        }
+
+        // 刷新局域网 IP 探测结果（面板/启动网关共用）
+        private void RefreshLanIp()
+        {
+            lanIp = LanAccess.DetectLanIp(out lanAdapter, out lanWireless);
+            if (lanIp.Length > 0)
+            {
+                lanPlainUrl = "http://" + lanIp + ":" + settings.LanPort + "/";
+            }
+            else
+            {
+                lanPlainUrl = "";
+            }
+        }
+
+        // 启动时清理孤儿网关：局域网未开启时，若局域网端口残留 lan-gateway.mjs 进程则结束
+        // （启动器被强杀/断电时不会走正常退出清理，残留网关会继续监听）
+        private void CleanupOrphanGateway()
+        {
+            if (settings.LanEnabled) return;
+            try
+            {
+                int pid = Engine.FindPidOnPort(settings.LanPort);
+                if (pid > 0 && pid != Process.GetCurrentProcess().Id && IsLanGatewayPid(pid))
+                {
+                    Log("检测到残留的局域网网关（PID " + pid + "），但局域网共享已关闭，正在清理…");
+                    Engine.KillProcessTree(pid);
+                }
+            }
+            catch { }
+        }
+
+        // 服务就绪 / 外部实例被接管后，若局域网开关打开则启动（或接管）网关
+        private DateTime lastLanStartAttempt = DateTime.MinValue; // 启动失败重试节流
+        private void MaybeStartLanGateway()
+        {
+            if (!settings.LanEnabled) return;
+            if (lanGateway != null)
+            {
+                try { if (!lanGateway.HasExited) return; } catch { }
+            }
+            if (lanExternalPid > 0)
+            {
+                // 已接管的网关进程若已死亡则清除引用，允许重新启动（自愈）
+                try { Process.GetProcessById(lanExternalPid); return; }
+                catch { lanExternalPid = 0; }
+            }
+            // 失败后最多每 5 秒重试一次，避免接管路径下反复刷日志
+            if ((DateTime.Now - lastLanStartAttempt).TotalSeconds < 5) return;
+            lastLanStartAttempt = DateTime.Now;
+            StartLanGateway();
+        }
+
+        private void StartLanGateway()
+        {
+            if (lanIp.Length == 0) RefreshLanIp();
+            if (lanIp.Length == 0)
+            {
+                Log("局域网共享：未检测到活动 WiFi/以太网 IP，无法开启。");
+                return;
+            }
+            // 确保 node.exe 已解析（接管外部实例时 StartServer 未调用，Engine.NodePath 可能为 null）
+            if (Engine.NodePath == null || Engine.NodePath.Length == 0)
+            {
+                try { Engine.Resolve(settings); }
+                catch (Exception ex)
+                {
+                    Log("局域网共享：环境解析失败（" + ex.Message + "）。");
+                    return;
+                }
+                if (Engine.NodePath == null || Engine.NodePath.Length == 0)
+                {
+                    Log("局域网共享：未找到 node.exe，无法启动网关（" + Engine.DetectError + "）。");
+                    return;
+                }
+            }
+            // 获取 dsh 启动令牌：自启路径由 OnServerOutput 捕获并写入 lan-token.txt；
+            // 接管路径可能缺失（旧启动器实例启动的 dsh web 不会重打 token）——
+            // 若已确认占用者是 DSH Harness 且 LAN 需要令牌，则重启一次以获取新令牌
+            // （网页会话 Cookie 持久化，重启不影响已认证浏览器）。
+            bool haveToken = ExtractToken(AuthenticatedUrl).Length > 0;
+            if (!haveToken)
+            {
+                try
+                {
+                    string t = File.Exists(LanAccess.TokenFilePath)
+                        ? File.ReadAllText(LanAccess.TokenFilePath, Encoding.UTF8).Trim() : "";
+                    haveToken = t.Length > 0;
+                }
+                catch { }
+            }
+            // 仅在外部/接管实例（非自启）且确认占用者是 DSH Harness 时重启以获取令牌
+            bool oursRunning = server != null;
+            try { if (server != null && server.HasExited) oursRunning = false; } catch { oursRunning = false; }
+            if (!haveToken && !oursRunning)
+            {
+                int ownerPid = externalPid > 0 ? externalPid : Engine.FindPidOnPort(Port);
+                bool ownerIsHarness = ownerPid > 0
+                    && ownerPid != Process.GetCurrentProcess().Id
+                    && Engine.IsDshHarness(ownerPid);
+                if (ownerIsHarness)
+                {
+                    Log("局域网共享需要 dsh 启动令牌，正在重启已接管的 Harness 服务以获取令牌…");
+                    StopLanGateway(); // 先停掉已接管的网关
+                    // 若局域网端口上还有遗留网关（旧启动器启动、可能配置过期），一并清理
+                    int oldGw = Engine.FindPidOnPort(settings.LanPort);
+                    if (oldGw > 0 && oldGw != Process.GetCurrentProcess().Id && IsLanGatewayPid(oldGw))
+                    {
+                        try { Engine.KillProcessTree(oldGw); } catch { }
+                    }
+                    try { Engine.KillProcessTree(ownerPid); } catch { }
+                    externalPid = 0;
+                    adoptTried = false;
+                    serverReady = false;
+                    starting = false;
+                    SetState(RunState.Stopped);
+                    StartServer();
+                    return;
+                }
+            }
+
+            // 端口被占用且不是已有网关 → 提示换端口
+            if (LanAccess.IsLanPortInUse(lanIp, settings.LanPort) && !LanAccess.IsGatewayRunning(lanIp, settings.LanPort))
+            {
+                Log("局域网端口 " + settings.LanPort + " 已被占用，请更换端口。");
+                return;
+            }
+            // 已有网关在运行（上次会话遗留）→ 接管
+            if (LanAccess.IsGatewayRunning(lanIp, settings.LanPort))
+            {
+                int pid = Engine.FindPidOnPort(settings.LanPort);
+                if (pid > 0 && IsLanGatewayPid(pid))
+                {
+                    lanExternalPid = pid;
+                    Log("已接管运行中的局域网网关（PID " + pid + "）。");
+                }
+                else
+                {
+                    Log("局域网端口 " + settings.LanPort + " 上已有服务在运行，未接管。");
+                }
+                return;
+            }
+            string gw = LanAccess.WriteGateway();
+            if (gw.Length == 0)
+            {
+                Log("局域网共享：无法释放 lan-gateway.mjs（资源缺失，请重新构建启动器）。");
+                return;
+            }
+            // PIN 解析：环境变量/.env → 自动生成
+            string pinSrc;
+            string pin = LanAccess.EffectivePin(out pinSrc);
+            if (pin.Length == 0)
+            {
+                pin = LanAccess.GeneratePin();
+                // 不在日志中打印 PIN（凭据不入日志文件），PIN 只在设置面板展示
+                Log("已自动生成访问 PIN（可在设置面板查看或修改）。");
+            }
+            string token = ExtractToken(AuthenticatedUrl);
+            if (token.Length > 0) SaveLanToken(token);
+
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = Engine.NodePath;
+            psi.Arguments = "\"" + gw + "\"";
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.WorkingDirectory = LanAccess.AppDataDir;
+            psi.EnvironmentVariables["DSH_LAN_HOST"] = lanIp;
+            psi.EnvironmentVariables["DSH_LAN_PORT"] = settings.LanPort.ToString();
+            psi.EnvironmentVariables["DSH_TARGET"] = "http://127.0.0.1:" + Port;
+            psi.EnvironmentVariables["DSH_LAN_PIN"] = pin;
+            psi.EnvironmentVariables["DSH_LAN_PIN_FILE"] = LanAccess.PinFilePath;
+            psi.EnvironmentVariables["DSH_LAN_TOKEN"] = token;
+            psi.EnvironmentVariables["DSH_LAN_TOKEN_FILE"] = LanAccess.TokenFilePath;
+            psi.EnvironmentVariables["DSH_LAN_SECRET_FILE"] = LanAccess.SecretFilePath;
+            psi.EnvironmentVariables["DSH_LAN_LOG"] = LanAccess.GatewayLogPath;
+            try { psi.EnvironmentVariables["DSH_LAN_ICON_B64"] = LoadWhaleIconB64(); } catch { }
+            try
+            {
+                lanGateway = Process.Start(psi);
+                lanGateway.OutputDataReceived += OnLanGatewayOutput;
+                lanGateway.ErrorDataReceived += OnLanGatewayOutput;
+                lanGateway.BeginOutputReadLine();
+                lanGateway.BeginErrorReadLine();
+                lanExternalPid = 0;
+                lanPlainUrl = "http://" + lanIp + ":" + settings.LanPort + "/";
+                // 不在日志中打印 PIN（凭据不入日志文件）
+                Log("局域网共享已开启: " + lanPlainUrl + "（PIN 请在设置面板查看）");
+                ApplyFirewallBestEffort();
+            }
+            catch (Exception ex)
+            {
+                lanGateway = null;
+                Log("局域网网关启动失败：" + ex.Message);
+            }
+        }
+
+        private void OnLanGatewayOutput(object sender, DataReceivedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.Data)) return;
+            Log("  [lan] " + Engine.Sanitize(e.Data));
+        }
+
+        private static bool IsLanGatewayPid(int pid)
+        {
+            string cmd = Engine.GetCommandLine(pid);
+            if (cmd.Length == 0) return false;
+            return cmd.IndexOf("lan-gateway.mjs", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string ExtractToken(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return "";
+            int i = url.IndexOf("token=", StringComparison.OrdinalIgnoreCase);
+            if (i < 0) return "";
+            string t = url.Substring(i + 6);
+            int amp = t.IndexOf('&');
+            if (amp >= 0) t = t.Substring(0, amp);
+            return t;
+        }
+
+        private static void SaveLanToken(string token)
+        {
+            try
+            {
+                Directory.CreateDirectory(LanAccess.AppDataDir);
+                File.WriteAllText(LanAccess.TokenFilePath, token, new UTF8Encoding(false));
+            }
+            catch { }
+        }
+
+        internal static string LoadWhaleIconB64()
+        {
+            try
+            {
+                Assembly asm = Assembly.GetExecutingAssembly();
+                string resName = null;
+                foreach (string n in asm.GetManifestResourceNames())
+                {
+                    if (n.EndsWith("whale-256.png", StringComparison.OrdinalIgnoreCase)) { resName = n; break; }
+                }
+                if (resName == null) return "";
+                using (Stream s = asm.GetManifestResourceStream(resName))
+                {
+                    if (s == null) return "";
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        return Convert.ToBase64String(ms.ToArray());
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return "";
+            }
+        }
+
+        internal void StopLanGateway()
+        {
+            if (lanGateway != null)
+            {
+                try
+                {
+                    if (!lanGateway.HasExited) Engine.KillProcessTree(lanGateway);
+                }
+                catch { }
+                lanGateway = null;
+            }
+            if (lanExternalPid > 0)
+            {
+                try { Engine.KillProcessTree(lanExternalPid); } catch { }
+                lanExternalPid = 0;
+            }
+        }
+
+        private void ApplyFirewallBestEffort()
+        {
+            int port = settings.LanPort;
+            try
+            {
+                if (LanAccess.HasRule(port))
+                {
+                    Log("防火墙规则已存在：" + LanAccess.RuleName(port));
+                    return;
+                }
+            }
+            catch { }
+            string msg;
+            int r = LanAccess.TryAddRule(port, out msg);
+            if (r == 0)
+            {
+                Log(msg);
+            }
+            else
+            {
+                Log("防火墙自动配置未生效（" + msg + "）。可在设置面板复制手动命令，或以管理员身份重试。");
+            }
+        }
+
+        private void RemoveFirewallBestEffort()
+        {
+            int port = settings.LanPort;
+            try
+            {
+                if (!LanAccess.HasRule(port)) return;
+            }
+            catch { return; }
+            string msg;
+            int r = LanAccess.TryRemoveRule(port, out msg);
+            if (r == 0) Log(msg);
+            else Log("防火墙规则删除未生效（" + msg + "）。请以管理员身份执行手动命令。");
+        }
+
+        // 设置面板提交局域网配置（开关/端口/PIN）。返回是否已生效（弹窗取消时返回 false）。
+        internal bool CommitLanSettings(bool enabled, string portText, string pinText)
+        {
+            int port;
+            if (!int.TryParse(portText, out port) || port < 1 || port > 65535)
+            {
+                MessageBox.Show("局域网端口必须是 1–65535 之间的数字。", Program.AppName,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (port == settings.Port)
+            {
+                MessageBox.Show("局域网端口不能与 Harness 端口（" + settings.Port + "）相同。", Program.AppName,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            bool portChanged = port != settings.LanPort;
+            bool enabling = enabled && !settings.LanEnabled;
+
+            if (enabling)
+            {
+                DialogResult r = MessageBox.Show(
+                    "此功能将允许同一 WiFi 下的其他设备访问您的 AI 服务，请确保处于可信网络（如家庭 WiFi），不要在公共网络开启。\n\n是否继续开启局域网访问？",
+                    "开启局域网共享", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (r != DialogResult.Yes) return false;
+            }
+
+            if (enabled)
+            {
+                string name;
+                bool w;
+                string ip = LanAccess.DetectLanIp(out name, out w);
+                if (ip.Length == 0)
+                {
+                    MessageBox.Show("未检测到活动 WiFi/以太网 IP，无法开启局域网访问。", Program.AppName,
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                if (LanAccess.IsLanPortInUse(ip, port) && !LanAccess.IsGatewayRunning(ip, port))
+                {
+                    MessageBox.Show("端口 " + port + " 已被占用，请更换一个未使用的端口。", Program.AppName,
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                lanIp = ip;
+                lanAdapter = name;
+                lanWireless = w;
+                lanPlainUrl = "http://" + ip + ":" + port + "/";
+            }
+
+            bool wasRunning = settings.LanEnabled
+                && (lanGateway != null || lanExternalPid > 0);
+
+            settings.LanPort = port;
+            settings.LanEnabled = enabled;
+            string oldPinSrc;
+            string oldEffectivePin = LanAccess.EffectivePin(out oldPinSrc);
+            string trimmedPin = pinText == null ? "" : pinText.Trim();
+            if (trimmedPin.Length > 0)
+            {
+                // 自定义 PIN：写入 settings 与 lan-pin.txt（彻底解决“自定义不生效”）
+                settings.LanPin = trimmedPin;
+                LanAccess.SavePin(trimmedPin);
+            }
+            else
+            {
+                // 清空 = 回到自动生成：必须同步删除 lan-pin.txt，否则旧自定义 PIN 仍会生效
+                settings.LanPin = "";
+                try { if (File.Exists(LanAccess.PinFilePath)) File.Delete(LanAccess.PinFilePath); } catch { }
+            }
+            settings.Save();
+            // PIN 发生变化 → 轮换签名密钥，旧 Cookie 全部失效（手机需重新输入 PIN）
+            string newPinSrc;
+            string newEffectivePin = LanAccess.EffectivePin(out newPinSrc);
+            if (newEffectivePin.Length > 0 && newEffectivePin != oldEffectivePin)
+            {
+                LanAccess.DeleteSecret();
+            }
+
+            if (enabled)
+            {
+                StartLanGateway();
+            }
+            else
+            {
+                StopLanGateway();
+                RemoveFirewallBestEffort();
+                Log("局域网共享已关闭，手机将无法访问。");
+            }
+            if (enabled && portChanged && wasRunning)
+            {
+                Log("局域网端口已变更，正在重启网关…");
+                StopLanGateway();
+                StartLanGateway();
+            }
+            return true;
+        }
+
+        // 重新生成 PIN（写 lan-pin.txt 并重启网关使生效）
+        internal string RegenerateLanPin()
+        {
+            settings.LanPin = "";
+            string pin = LanAccess.GeneratePin();
+            settings.Save();
+            // 轮换会话签名密钥：所有旧 Cookie 立即失效，手机端必须输入新 PIN
+            LanAccess.DeleteSecret();
+            if (lanGateway != null || lanExternalPid > 0)
+            {
+                Log("PIN 已重新生成，正在重启局域网网关…");
+                StopLanGateway();
+                StartLanGateway();
+            }
+            return pin;
+        }
+
+        // 以管理员身份（UAC）配置防火墙
+        internal void TryFirewallElevated()
+        {
+            bool ok = LanAccess.TryAddRuleElevated(settings.LanPort);
+            if (ok) Log("已打开管理员窗口配置防火墙（请在弹出的 PowerShell 窗口中查看结果，按 Enter 关闭）。");
+            else Log("未能打开管理员窗口（可能取消了 UAC 授权）。");
+        }
+
+        // 彻底删除全部归档会话（删除磁盘数据 + 清空归档列表 + 重启服务生效）
+        internal void CleanArchivedSessions()
+        {
+            try
+            {
+                int count = LanAccess.ArchivedSessionCount();
+                if (count == 0)
+                {
+                    MessageBox.Show("当前没有归档会话。", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                DialogResult r = MessageBox.Show(
+                    "将彻底删除 " + count + " 个已归档会话及其全部数据（聊天记录、文件引用），此操作不可恢复。\n\n确定继续吗？",
+                    "清理归档会话", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (r != DialogResult.Yes) return;
+                string detail;
+                int deleted = LanAccess.DeleteArchivedSessions(out detail);
+                // 重启 dsh 服务让归档列表变更生效
+                if (deleted > 0)
+                {
+                    Log("归档会话已清理，正在重启服务以生效…");
+                    if (server != null && !server.HasExited) { try { Engine.KillProcessTree(server); } catch { } }
+                    if (externalPid > 0) { try { Engine.KillProcessTree(externalPid); } catch { } }
+                    ReleaseServer();
+                    serverReady = false;
+                    starting = false;
+                    StartServer();
+                }
+                MessageBox.Show(detail, "清理归档会话", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("清理失败：" + ex.Message, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // 在浏览器中打开局域网地址（本机验证用）
+        internal void OpenLanInBrowser()
+        {
+            if (lanPlainUrl.Length == 0) return;
+            try { Process.Start(lanPlainUrl); } catch { }
+        }
+
+        // QR 码页面（单文件 HTML + qrcode.js CDN，WebView2 渲染）
+        internal static string LanQrHtml(string url)
+        {
+            // 二维码页面（v3 修复）：
+            //  - WebView2 已强制 --force-device-scale-factor=1（CSS 像素=物理像素），容器固定尺寸一定放得下
+            //  - #qr-wrapper 固定 220x220，flex-shrink:0，overflow:visible !important；min() 兜底防极端视口
+            //  - #qr 固定 200x200 + overflow:hidden，canvas/img 绝对定位重叠（qrcode.js 会同时生成两者，避免堆叠撑高）
+            //  - 生成后 setTimeout 强制 canvas/img 全尺寸 200px、display:block、transform:none、object-fit:contain
+            //  - 覆盖全局 CSS 的 max-width:100%、transform:scale、zoom 干扰；qrcode.js 参数严格 200
+            string html =
+                "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
+                "<style>" +
+                "html,body{margin:0;padding:0;background:#ffffff;height:100%;overflow:hidden;}" +
+                "body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;display:flex;flex-direction:column;" +
+                "align-items:center;justify-content:flex-start;}" +
+                "#qr-wrapper{width:min(220px,calc(100vw - 8px));height:220px;" +
+                "flex:none;flex-shrink:0;margin:4px auto 2px;overflow:visible !important;" +
+                "display:flex;align-items:center;justify-content:center;background:#ffffff;}" +
+                "#qr-wrapper *{max-width:none !important;max-height:none !important;transform:none !important;" +
+                "zoom:1 !important;scale:none !important;}" +
+                "#qr{width:200px;height:200px;position:relative;overflow:hidden;flex:none;background:#ffffff;}" +
+                "#qr canvas,#qr img{position:absolute;top:0;left:0;display:block !important;" +
+                "width:200px !important;height:200px !important;min-width:200px !important;min-height:200px !important;" +
+                "max-width:200px !important;max-height:200px !important;object-fit:contain !important;}" +
+                "#u{font-size:11px;line-height:14px;height:14px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#333;padding:0 8px;text-align:center;max-width:230px;}" +
+                "</style></head><body>" +
+                "<div id=\"qr-wrapper\"><div id=\"qr\"></div></div>" +
+                "<div id=\"u\"></div>" +
+                "<script src=\"https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js\"></script>" +
+                "<script>" +
+                "var url=" + JsonEscape(url) + ";" +
+                "document.getElementById('u').textContent=url;" +
+                "function forceSize(){" +
+                "try{var els=document.querySelectorAll('#qr canvas,#qr img');" +
+                "for(var i=0;i<els.length;i++){var el=els[i];" +
+                "el.style.display='block';el.style.width='200px';el.style.height='200px';" +
+                "el.style.minWidth='200px';el.style.minHeight='200px';" +
+                "el.style.maxWidth='200px';el.style.maxHeight='200px';" +
+                "el.style.transform='none';el.style.objectFit='contain';}}catch(e){}}" +
+                "function draw(){try{" +
+                "var q=new QRCode(document.getElementById('qr'),{text:url,width:200,height:200," +
+                "colorDark:'#111827',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});" +
+                "setTimeout(forceSize,60);setTimeout(forceSize,300);" +
+                "document.getElementById('u').textContent='扫码访问 '+url;" +
+                "}catch(e){forceSize();document.getElementById('u').textContent=url;}}" +
+                "if(typeof QRCode!=='undefined'){draw();}else{" +
+                "var s1=document.createElement('script');" +
+                "s1.src='https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js';" +
+                "s1.onload=draw;s1.onerror=function(){var s2=document.createElement('script');" +
+                "s2.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';" +
+                "s2.onload=draw;s2.onerror=function(){" +
+                "document.getElementById('u').textContent='离线模式：请手动输入 '+url;};" +
+                "document.head.appendChild(s2);};" +
+                "document.head.appendChild(s1);}</script>" +
+                "</body></html>";
+            return html;
+        }
+
+        private static string JsonEscape(string s)
+        {
+            if (s == null) return "\"\"";
+            StringBuilder sb = new StringBuilder();
+            sb.Append('"');
+            foreach (char ch in s)
+            {
+                if (ch == '"' || ch == '\\') sb.Append('\\').Append(ch);
+                else if (ch == '\n') sb.Append("\\n");
+                else if (ch == '\r') sb.Append("\\r");
+                else if (ch < 32) sb.Append("\\u").Append(((int)ch).ToString("x4"));
+                else sb.Append(ch);
+            }
+            sb.Append('"');
+            return sb.ToString();
+        }
+
         private void OpenBrowser()
         {
             int port = Port;
@@ -1208,7 +1890,7 @@ namespace DSHLauncher
             bool running = (server != null && !server.HasExited) || Engine.IsServerReady(port);
             if (!running)
             {
-                Log("服务未运行，请先点击“一键启动”。");
+                Log("服务未运行，请先通过托盘菜单“启动服务”。");
                 return;
             }
             string url = !string.IsNullOrEmpty(AuthenticatedUrl)
@@ -1232,7 +1914,6 @@ namespace DSHLauncher
                 }
                 embedded.NavigateTo(url);
                 embedded.ShowWindow();
-                HideLauncherOnOpen();
             }
             catch (Exception ex)
             {
@@ -1262,13 +1943,11 @@ namespace DSHLauncher
                     Process.Start(edge, args.ToString());
                     Log("已在精简窗口（Edge app 模式）中打开 " + url);
                     LogEdgeMemory(profile);
-                    HideLauncherOnOpen();
                     return;
                 }
                 Log("未找到 Edge，改用默认浏览器打开。");
                 Process.Start(url);
                 Log("已在浏览器中打开 " + url);
-                HideLauncherOnOpen();
             }
             catch (Exception ex)
             {
@@ -1388,6 +2067,8 @@ namespace DSHLauncher
             {
                 GuideForm.ShowGuide(this);
             }
+            // 清理孤儿局域网网关（LAN 关闭时确保手机无法访问）
+            CleanupOrphanGateway();
             // 固定：打开程序即自动启动服务
             System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
             t.Interval = 600;
@@ -1426,6 +2107,7 @@ namespace DSHLauncher
                 {
                     if (srvRun) { try { Engine.KillProcessTree(server); } catch { } }
                     if (extRun) { try { Engine.KillProcessTree(externalPid); } catch { } }
+                    StopLanGateway();
                     Log("已停止。");
                 }
                 else
@@ -1468,6 +2150,8 @@ namespace DSHLauncher
                 {
                     if (serverRunning) { try { Engine.KillProcessTree(server); killedAny = true; } catch { } }
                     if (extRunning) { try { Engine.KillProcessTree(externalPid); killedAny = true; } catch { } }
+                    StopLanGateway();
+                    killedAny = true;
                     Log("已停止。");
                 }
                 else
@@ -1483,6 +2167,7 @@ namespace DSHLauncher
                 {
                     if (serverRunning) { try { Engine.KillProcessTree(server); killedAny = true; } catch { } }
                     if (extRunning) { try { Engine.KillProcessTree(externalPid); killedAny = true; } catch { } }
+                    StopLanGateway();
                 }
                 else
                 {
@@ -1546,19 +2231,25 @@ namespace DSHLauncher
     internal class SettingsForm : Form
     {
         private LauncherForm host;
-        private TextBox txtPort, txtWork;
-        private Button btnBrowseWork, btnSave;
-        private CheckBox chkTray;
+        private TextBox txtPort, txtWork, txtLanPort, txtLanPin;
+        private Button btnBrowseWork, btnSave, btnGenPin, btnFwElevated, btnCopyCmd, btnCopyUrl, btnOpenLan;
+        private CheckBox chkTray, chkLan;
+        private Label lblLanStatus, lblPinSrc, lblFwStatus, lblOllama;
+        private TextBox txtLanUrl, txtManual;
         private TextBox txtLog;
-        private Button btnDoc, btnLogDir, btnAbout, btnClose;
+        private Button btnDoc, btnLogDir, btnAbout, btnClose, btnCleanArch;
+        private WebView2 lanQr;                 // 二维码（qrcode.js 渲染到 canvas）
+        private bool qrReady = false;
+        private string qrShownUrl = "";
+        private System.Windows.Forms.Timer refreshTimer;
 
         public SettingsForm(LauncherForm host)
         {
             this.host = host;
             this.ShowInTaskbar = false;
             this.Text = Program.AppName + " 设置";
-            this.ClientSize = new Size(560, 500);
-            this.MinimumSize = new Size(520, 440);
+            this.ClientSize = new Size(680, 780);
+            this.MinimumSize = new Size(640, 710);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Microsoft YaHei UI", 9f);
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -1580,11 +2271,11 @@ namespace DSHLauncher
             lWork.TextAlign = ContentAlignment.MiddleLeft;
 
             txtWork = new TextBox();
-            txtWork.SetBounds(82, 56, 360, 26);
+            txtWork.SetBounds(82, 56, 380, 26);
             txtWork.Text = host.UiWorkDir;
 
             btnBrowseWork = new Button();
-            btnBrowseWork.SetBounds(448, 56, 92, 26);
+            btnBrowseWork.SetBounds(468, 56, 92, 26);
             btnBrowseWork.Text = "浏览…";
             btnBrowseWork.Click += delegate
             {
@@ -1601,7 +2292,7 @@ namespace DSHLauncher
             chkTray.Checked = host.UiTray;
 
             btnSave = new Button();
-            btnSave.SetBounds(424, 92, 116, 30);
+            btnSave.SetBounds(564, 92, 96, 30);
             btnSave.Text = "保存设置";
             btnSave.Click += delegate
             {
@@ -1609,15 +2300,16 @@ namespace DSHLauncher
                 // 保存后同步回显示（端口校验失败时由宿主复位）
                 txtPort.Text = host.UiPortText;
                 txtWork.Text = host.UiWorkDir;
+                RefreshLanPanel();
             };
 
             // 运行日志
             Label lLog = new Label();
-            lLog.SetBounds(16, 132, 100, 20);
+            lLog.SetBounds(16, 134, 100, 20);
             lLog.Text = "运行日志:";
 
             txtLog = new TextBox();
-            txtLog.SetBounds(16, 154, 528, 268);
+            txtLog.SetBounds(16, 156, 648, 120);
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Both;
@@ -1632,24 +2324,196 @@ namespace DSHLauncher
             logMenu.Items.Add("复制全部", null, delegate { if (txtLog.TextLength > 0) Clipboard.SetText(txtLog.Text); });
             txtLog.ContextMenuStrip = logMenu;
 
+            // ==================== 局域网共享面板 ====================
+            // 用 Panel（客户区无标题偏移，坐标精确可控），避免 GroupBox 客户区下移导致控件超出被裁剪。
+            // 布局预算：Panel 高 320，内容最大底 316；手动命令区独立置于 Panel 下方。
+            Panel pLan = new Panel();
+            pLan.SetBounds(12, 290, 656, 340);
+            pLan.BorderStyle = BorderStyle.FixedSingle;
+            pLan.BackColor = Color.FromArgb(252, 252, 252);
+
+            chkLan = new CheckBox();
+            chkLan.SetBounds(16, 8, 320, 20);
+            chkLan.Text = "允许局域网访问（默认关闭）";
+            chkLan.Checked = host.UiLanEnabled;
+
+            Label lLanPort = new Label();
+            lLanPort.SetBounds(16, 32, 44, 22);
+            lLanPort.Text = "端口:";
+            lLanPort.TextAlign = ContentAlignment.MiddleLeft;
+
+            txtLanPort = new TextBox();
+            txtLanPort.SetBounds(60, 32, 58, 26);
+            txtLanPort.Text = host.UiLanPortText;
+
+            lblLanStatus = new Label();
+            lblLanStatus.SetBounds(128, 32, 500, 22);
+            lblLanStatus.ForeColor = Color.FromArgb(70, 70, 70);
+
+            txtLanUrl = new TextBox();
+            txtLanUrl.SetBounds(16, 62, 472, 26);
+            txtLanUrl.ReadOnly = true;
+            txtLanUrl.BackColor = Color.White;
+
+            btnCopyUrl = new Button();
+            btnCopyUrl.SetBounds(496, 62, 68, 26);
+            btnCopyUrl.Text = "复制地址";
+            btnCopyUrl.Click += delegate { Clipboard.SetText(txtLanUrl.Text); };
+
+            btnOpenLan = new Button();
+            btnOpenLan.SetBounds(572, 62, 68, 26);
+            btnOpenLan.Text = "打开";
+            btnOpenLan.Click += delegate { host.OpenLanInBrowser(); };
+
+            // 二维码（WebView2 + qrcode.js；控件需大于 QR 页面内容 220 容器 + 边距）
+            lanQr = new WebView2();
+            lanQr.SetBounds(16, 94, 232, 226);
+            lanQr.DefaultBackgroundColor = Color.White;
+
+            // PIN（右侧，x=262 起）
+            Label lblPin = new Label();
+            lblPin.SetBounds(262, 92, 160, 18);
+            lblPin.Text = "访问密码 (PIN):";
+
+            txtLanPin = new TextBox();
+            txtLanPin.SetBounds(262, 112, 120, 24);
+            txtLanPin.UseSystemPasswordChar = true;
+
+            btnGenPin = new Button();
+            btnGenPin.SetBounds(390, 112, 100, 24);
+            btnGenPin.Text = "重新生成";
+            btnGenPin.Click += delegate
+            {
+                string pin = host.RegenerateLanPin();
+                txtLanPin.Text = "";
+                RefreshLanPanel();
+                MessageBox.Show("新的访问 PIN 已生成：" + pin + "\n\n手机扫码后输入该 PIN 即可访问。",
+                    "PIN 已更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
+            lblPinSrc = new Label();
+            lblPinSrc.SetBounds(262, 140, 380, 16);
+            lblPinSrc.ForeColor = Color.Gray;
+            lblPinSrc.Font = new Font("Microsoft YaHei UI", 8.5f);
+
+            Label lblPinHint = new Label();
+            lblPinHint.SetBounds(262, 156, 380, 32);
+            lblPinHint.Text = "留空 = 自动生成；也可在 .env 中配置 DSH_LAN_PIN（环境变量优先）。";
+            lblPinHint.ForeColor = Color.Gray;
+            lblPinHint.Font = new Font("Microsoft YaHei UI", 8.5f);
+
+            // 防火墙
+            Label lblFwTitle = new Label();
+            lblFwTitle.SetBounds(262, 192, 56, 18);
+            lblFwTitle.Text = "防火墙:";
+            lblFwTitle.TextAlign = ContentAlignment.MiddleLeft;
+
+            lblFwStatus = new Label();
+            lblFwStatus.SetBounds(318, 192, 320, 18);
+            lblFwStatus.ForeColor = Color.FromArgb(70, 70, 70);
+
+            btnFwElevated = new Button();
+            btnFwElevated.SetBounds(262, 212, 200, 24);
+            btnFwElevated.Text = "以管理员身份配置防火墙";
+            btnFwElevated.Click += delegate
+            {
+                host.TryFirewallElevated();
+                RefreshLanPanel();
+            };
+
+            lblOllama = new Label();
+            lblOllama.SetBounds(262, 240, 380, 30);
+            lblOllama.ForeColor = Color.FromArgb(120, 100, 40);
+            lblOllama.Font = new Font("Microsoft YaHei UI", 8.5f);
+            // 文案由 RefreshLanPanel 按 LAN 开关状态动态设置（此处为初始占位）
+            lblOllama.Text = "";
+
+            // 事件
+            chkLan.CheckedChanged += delegate
+            {
+                bool ok = host.CommitLanSettings(chkLan.Checked, txtLanPort.Text.Trim(), txtLanPin.Text);
+                if (!ok) chkLan.Checked = host.UiLanEnabled;
+                RefreshLanPanel();
+            };
+            txtLanPort.Leave += delegate
+            {
+                if (chkLan.Checked && txtLanPort.Text.Trim() != host.UiLanPortText)
+                {
+                    host.CommitLanSettings(true, txtLanPort.Text.Trim(), txtLanPin.Text);
+                    RefreshLanPanel();
+                }
+            };
+            // PIN 输入失焦即保存（无论 LAN 开关状态）：自定义 PIN 必须可靠生效
+            txtLanPin.Leave += delegate
+            {
+                if (txtLanPin.Text.Trim() != host.UiLanPin)
+                {
+                    host.CommitLanSettings(chkLan.Checked, txtLanPort.Text.Trim(), txtLanPin.Text);
+                    RefreshLanPanel();
+                }
+            };
+
+            pLan.Controls.Add(chkLan);
+            pLan.Controls.Add(lLanPort);
+            pLan.Controls.Add(txtLanPort);
+            pLan.Controls.Add(lblLanStatus);
+            pLan.Controls.Add(txtLanUrl);
+            pLan.Controls.Add(btnCopyUrl);
+            pLan.Controls.Add(btnOpenLan);
+            pLan.Controls.Add(lanQr);
+            pLan.Controls.Add(lblPin);
+            pLan.Controls.Add(txtLanPin);
+            pLan.Controls.Add(btnGenPin);
+            pLan.Controls.Add(lblPinSrc);
+            pLan.Controls.Add(lblPinHint);
+            pLan.Controls.Add(lblFwTitle);
+            pLan.Controls.Add(lblFwStatus);
+            pLan.Controls.Add(btnFwElevated);
+            pLan.Controls.Add(lblOllama);
+
+            // 手动命令（无管理员权限时的备用方案，独立置于面板下方）
+            Label lblManualTitle = new Label();
+            lblManualTitle.SetBounds(12, 646, 460, 18);
+            lblManualTitle.Text = "防火墙手动命令（自动配置失败时，管理员执行）：";
+
+            txtManual = new TextBox();
+            txtManual.SetBounds(12, 666, 492, 62);
+            txtManual.Multiline = true;
+            txtManual.ReadOnly = true;
+            txtManual.BackColor = Color.FromArgb(245, 245, 245);
+            txtManual.ForeColor = Color.FromArgb(60, 60, 60);
+            txtManual.Font = new Font("Consolas", 8.5f);
+            txtManual.ScrollBars = ScrollBars.Vertical;
+            txtManual.WordWrap = false;
+
+            btnCopyCmd = new Button();
+            btnCopyCmd.SetBounds(512, 682, 130, 28);
+            btnCopyCmd.Text = "复制手动命令";
+            btnCopyCmd.Click += delegate { Clipboard.SetText(txtManual.Text); };
+
             // 底部
             btnDoc = new Button();
-            btnDoc.SetBounds(16, 440, 96, 30);
+            btnDoc.SetBounds(16, 746, 96, 30);
             btnDoc.Text = "使用文档";
             btnDoc.Click += delegate { GuideForm.ShowGuide(this); };
 
             btnLogDir = new Button();
-            btnLogDir.SetBounds(120, 440, 116, 30);
+            btnLogDir.SetBounds(120, 746, 116, 30);
             btnLogDir.Text = "打开日志目录";
             btnLogDir.Click += delegate { host.OpenLogDir(); };
 
+            btnCleanArch = new Button();
+            btnCleanArch.SetBounds(352, 746, 140, 30);
+            btnCleanArch.Text = "清理归档会话";
+            btnCleanArch.Click += delegate { host.CleanArchivedSessions(); };
+
             btnAbout = new Button();
-            btnAbout.SetBounds(244, 440, 100, 30);
+            btnAbout.SetBounds(244, 746, 100, 30);
             btnAbout.Text = "关于此程序";
             btnAbout.Click += delegate { host.ShowAbout(); };
 
             btnClose = new Button();
-            btnClose.SetBounds(448, 440, 96, 30);
+            btnClose.SetBounds(564, 746, 96, 30);
             btnClose.Text = "关闭";
             btnClose.Click += delegate { Close(); };
 
@@ -1662,8 +2526,13 @@ namespace DSHLauncher
             this.Controls.Add(btnSave);
             this.Controls.Add(lLog);
             this.Controls.Add(txtLog);
+                        this.Controls.Add(pLan);
+            this.Controls.Add(lblManualTitle);
+            this.Controls.Add(txtManual);
+            this.Controls.Add(btnCopyCmd);
             this.Controls.Add(btnDoc);
             this.Controls.Add(btnLogDir);
+            this.Controls.Add(btnCleanArch);
             this.Controls.Add(btnAbout);
             this.Controls.Add(btnClose);
 
@@ -1672,7 +2541,17 @@ namespace DSHLauncher
             this.FormClosed += delegate
             {
                 try { host.LogLine -= OnLogLine; } catch { }
+                try { if (refreshTimer != null) refreshTimer.Stop(); } catch { }
             };
+
+            // 局域网状态定时刷新（网关/防火墙状态变化时同步界面）
+            refreshTimer = new System.Windows.Forms.Timer();
+            refreshTimer.Interval = 1500;
+            refreshTimer.Tick += delegate { RefreshLanPanel(); };
+            refreshTimer.Start();
+
+            RefreshLanPanel();
+            InitQrWebView2();
         }
 
         private void OnLogLine(string line)
@@ -1697,8 +2576,106 @@ namespace DSHLauncher
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
+            RefreshLanPanel();
+        }
+
+        // ---------------- 局域网面板刷新 + 二维码 ----------------
+        private void RefreshLanPanel()
+        {
+            if (IsDisposed) return;
+            try
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke((Action)(delegate { RefreshLanPanel(); }));
+                    return;
+                }
+                chkLan.Checked = host.UiLanEnabled;
+                // 正在编辑中的输入框不刷新，避免用户输入被定时器覆盖丢失（自定义 PIN/端口必须可靠提交）
+                if (!txtLanPort.Focused) txtLanPort.Text = host.UiLanPortText;
+                if (!txtLanPin.Focused) txtLanPin.Text = host.UiLanPin;
+                lblLanStatus.Text = host.UiLanStatus;
+                txtLanUrl.Text = host.UiLanPlainUrl;
+                lblPinSrc.Text = "生效来源: " + host.UiLanPinSource;
+                lblFwStatus.Text = host.UiFirewallStatus;
+                int lp = 3081;
+                try { lp = int.Parse(host.UiLanPortText); } catch { }
+                txtManual.Text = LanAccess.ManualAddCommand(lp) + "\r\n" + LanAccess.ManualRemoveCommand(lp);
+                // Ollama 提示按 LAN 开关动态显示（OLLAMA_HOST 仅在开启局域网时才会被设置）
+                if (host.UiOllamaDetected)
+                {
+                    lblOllama.Visible = true;
+                    lblOllama.Text = host.UiLanEnabled
+                        ? "检测到 Ollama：局域网已开启，dsh 进程已设置 OLLAMA_HOST=0.0.0.0、OLLAMA_ORIGINS=*。"
+                        : "检测到 Ollama：开启局域网访问后，将为 dsh 进程自动设置 OLLAMA_HOST=0.0.0.0、OLLAMA_ORIGINS=*。";
+                }
+                else
+                {
+                    lblOllama.Visible = false;
+                }
+                ReloadQr();
+            }
+            catch { }
+        }
+
+        // 二维码 WebView2 环境缓存（同进程复用同一 user-data-folder，窗体重建不重复创建）
+        private static CoreWebView2Environment cachedQrEnv = null;
+        private static readonly object cachedQrEnvLock = new object();
+
+        private void InitQrWebView2()
+        {
+            try
+            {
+                string profile = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "DSHLauncher", "webview2-profile-settings");
+                CoreWebView2EnvironmentOptions opt = new CoreWebView2EnvironmentOptions();
+                opt.AdditionalBrowserArguments = "--force-device-scale-factor=1";
+
+                TaskScheduler ui = TaskScheduler.FromCurrentSynchronizationContext();
+                Task<CoreWebView2Environment> envTask;
+                lock (cachedQrEnvLock)
+                {
+                    envTask = cachedQrEnv != null ? Task.FromResult(cachedQrEnv) : null;
+                }
+                if (envTask == null)
+                {
+                    envTask = CoreWebView2Environment.CreateAsync(null, profile, opt);
+                    envTask.ContinueWith(delegate(Task<CoreWebView2Environment> t)
+                    {
+                        if (t.Status == TaskStatus.RanToCompletion)
+                        {
+                            lock (cachedQrEnvLock) { if (cachedQrEnv == null) cachedQrEnv = t.Result; }
+                        }
+                    });
+                }
+                envTask.ContinueWith(
+                    delegate(Task<CoreWebView2Environment> t)
+                    {
+                        if (t.IsFaulted || t.IsCanceled) return;
+                        CoreWebView2Environment env = t.Result;
+                        lanQr.EnsureCoreWebView2Async(env).ContinueWith(delegate(Task t2)
+                        {
+                            if (t2.IsFaulted || t2.IsCanceled) return;
+                            qrReady = true;
+                            try { lanQr.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false; } catch { }
+                            ReloadQr();
+                        }, ui);
+                    }, ui);
+            }
+            catch { }
+        }
+
+        private void ReloadQr()
+        {
+            string url = host.UiLanPlainUrl;
+            if (url.Length == 0 || !qrReady || lanQr.CoreWebView2 == null) return;
+            if (url == qrShownUrl) return;
+            qrShownUrl = url;
+            try { lanQr.CoreWebView2.NavigateToString(LauncherForm.LanQrHtml(url)); } catch { }
         }
     }
+
     // ---------------------------------------------------------------------
     // 内嵌 Harness 窗口（WebView2，无需浏览器）
     // 标准窗口形态：系统标题栏；标题栏/边框颜色跟随 Harness 主题（浅色主题→浅色栏，深色→深色）
@@ -1725,7 +2702,7 @@ namespace DSHLauncher
             this.url = url;
             this.Text = Program.AppName;
             this.ClientSize = new Size(1100, 720);
-            this.MinimumSize = new Size(640, 480);
+            this.MinimumSize = new Size(1000, 600); // 最小宽度 1000，避免触发 dsh 移动端响应式布局
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Microsoft YaHei UI", 9f);
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -1852,6 +2829,11 @@ namespace DSHLauncher
             }
         }
 
+        // WebView2 环境缓存：同一进程对同一 user-data-folder 重复 CreateAsync 会失败，
+        // 窗体重建时复用已创建的环境（static 跨实例共享）
+        private static CoreWebView2Environment cachedEnv = null;
+        private static readonly object cachedEnvLock = new object();
+
         private void InitWebView2()
         {
             try
@@ -1865,7 +2847,23 @@ namespace DSHLauncher
                     + "--disable-sync --disable-breakpad --disable-background-mode --disable-gpu "
                     + "--disable-features=msEdgeSidebarV2,msEdgeShoppingAssistant,msEdgeTranslate";
                 TaskScheduler ui = TaskScheduler.FromCurrentSynchronizationContext();
-                CoreWebView2Environment.CreateAsync(null, profile, opt).ContinueWith(
+                Task<CoreWebView2Environment> envTask;
+                lock (cachedEnvLock)
+                {
+                    envTask = cachedEnv != null ? Task.FromResult(cachedEnv) : null;
+                }
+                if (envTask == null)
+                {
+                    envTask = CoreWebView2Environment.CreateAsync(null, profile, opt);
+                    envTask.ContinueWith(delegate(Task<CoreWebView2Environment> t)
+                    {
+                        if (t.Status == TaskStatus.RanToCompletion)
+                        {
+                            lock (cachedEnvLock) { if (cachedEnv == null) cachedEnv = t.Result; }
+                        }
+                    });
+                }
+                envTask.ContinueWith(
                     delegate(Task<CoreWebView2Environment> t)
                     {
                         if (t.IsFaulted || t.IsCanceled) { OnInitFailed(); return; }
@@ -1878,6 +2876,7 @@ namespace DSHLauncher
                             {
                                 // 禁用默认右键菜单，保持界面纯净
                                 wv.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+                                InjectDesktopLayout();
                                 wv.CoreWebView2.Navigate(url);
                             }
                             catch { }
@@ -1889,6 +2888,35 @@ namespace DSHLauncher
                 host.Log("内嵌窗口初始化失败：" + ex.Message);
                 OnInitFailed();
             }
+        }
+
+        // 注入桌面端布局强制（force-desktop）：WebView2 环境或宽视口（>900px）下强制显示侧边栏，
+        // 避免 DPI 缩放 / 窄窗口触发 dsh 前端的移动端响应式布局（侧边栏被隐藏）
+        private void InjectDesktopLayout()
+        {
+            try
+            {
+                string js =
+                    "(function(){" +
+                    "var IS_WEBVIEW2=!!(window.chrome&&window.chrome.webview);" +
+                    "var css='body.force-desktop aside,body.force-desktop [class*=\"sidebar\" i]," +
+                    "body.force-desktop [class*=\"rail\" i],body.force-desktop [class*=\"drawer\" i]" +
+                    "{display:flex!important;transform:none!important;visibility:visible!important;" +
+                    "opacity:1!important;pointer-events:auto!important;max-width:none!important}';" +
+                    "var st=document.createElement('style');st.textContent=css;" +
+                    "(document.head||document.documentElement).appendChild(st);" +
+                    "function apply(){var force=IS_WEBVIEW2||window.innerWidth>900;" +
+                    "if(document.body){if(force)document.body.classList.add('force-desktop');" +
+                    "else document.body.classList.remove('force-desktop');}}" +
+                    "if(document.body)apply();" +
+                    "document.addEventListener('DOMContentLoaded',apply);" +
+                    "window.addEventListener('resize',apply);" +
+                    "var iv=setInterval(function(){if(document.body)apply();},1500);" +
+                    "setTimeout(function(){clearInterval(iv);},120000);" +
+                    "})();";
+                wv.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(js);
+            }
+            catch { }
         }
 
         private void OnInitFailed()
@@ -1987,6 +3015,17 @@ namespace DSHLauncher
                 int val = Convert.ToInt32(m.Groups[1].Value, 16);
                 return Color.FromArgb(255, (val >> 16) & 0xFF, (val >> 8) & 0xFF, val & 0xFF);
             }
+            // 3 位十六进制（如 #fff），每位扩展为两位
+            m = Regex.Match(css, "#([0-9a-fA-F]{3})(?![0-9a-fA-F])");
+            if (m.Success)
+            {
+                string h = m.Groups[1].Value;
+                int val = Convert.ToInt32(
+                    h.Substring(0, 1) + h.Substring(0, 1) +
+                    h.Substring(1, 1) + h.Substring(1, 1) +
+                    h.Substring(2, 1) + h.Substring(2, 1), 16);
+                return Color.FromArgb(255, (val >> 16) & 0xFF, (val >> 8) & 0xFF, val & 0xFF);
+            }
             throw new FormatException("未知颜色: " + css);
         }
     }
@@ -2025,17 +3064,17 @@ namespace DSHLauncher
             "启动器会自动检测 Node.js 和 dsh。需要它们时：\n" +
             "· 安装 Node.js LTS 版本；\n" +
             "· 打开命令行执行：npm install -g @deepseek-ai/dsh\n" +
-            "· 没装也没关系：一键安装包会帮你部署，或点\"Node…\"手动指定。\n" +
+            "· 没装也没关系：一键安装包会帮你部署，或在设置文件 settings.ini 中手动指定 nodePath。\n" +
             "\n" +
             "──────────────────────────────\n" +
             "四、常见问题\n" +
             "──────────────────────────────\n" +
-            "· 打不开 http://127.0.0.1:3080 → 先点\"一键启动\"，等状态变\"运行中\"；\n" +
+            "· 打不开 http://127.0.0.1:3080 → 先通过托盘菜单\"启动服务\"，等状态变\"运行中\"；\n" +
             "· 卡在\"启动中\"或提示残留进程无响应 → 会自动清理上次遗留的 Harness 进程并重新启动，\n" +
-            "  或点\"一键启动\"触发自动清理；服务挂起时也会自动重启；\n" +
+            "  或再点一次\"启动服务\"触发自动清理；服务挂起时也会自动重启；\n" +
             "· 显示\"运行中（已接管）\" → 说明已有 Harness 在跑，直接点停止/打开界面；\n" +
-            "· 嫌浏览器占内存 → 默认用\"内嵌窗口\"打开界面（无需浏览器，像原生软件一样），\n" +
-            "  取消勾选则改用 Edge 精简窗口；两者都比完整浏览器省内存；\n" +
+            "· 嫌浏览器占内存 → 默认用\"内嵌窗口\"打开界面（无需浏览器，像原生软件一样）；\n" +
+            "  WebView2 不可用时自动回退 Edge 精简窗口，两者都比完整浏览器省内存；\n" +
             "· 想开机自启 → 把启动器快捷方式放进 shell:startup 文件夹；\n" +
             "· 点 ✕ 想彻底退出 → 取消勾选\"关闭时最小化到托盘\"，或用托盘菜单\"退出\"。\n";
 
@@ -2079,6 +3118,13 @@ namespace DSHLauncher
     // ---------------------------------------------------------------------
     internal static class SelfTest
     {
+        // 写自检报告：日志路径不可写时静默跳过（避免 catch 内再次抛出导致崩溃对话框）
+        private static void WriteReport(string logPath, List<string> report)
+        {
+            try { File.WriteAllLines(logPath, report.ToArray(), new UTF8Encoding(true)); }
+            catch { }
+        }
+
         public static int Run()
         {
             string exeDir = Path.GetDirectoryName(Application.ExecutablePath);
@@ -2102,7 +3148,7 @@ namespace DSHLauncher
                 {
                     report.Add("");
                     report.Add("FAIL: 未解析到 dsh 启动入口。");
-                    File.WriteAllLines(logPath, report.ToArray(), new UTF8Encoding(true));
+                    WriteReport(logPath, report);
                     return 1;
                 }
 
@@ -2117,6 +3163,16 @@ namespace DSHLauncher
                 bool identityOk = cmdline.Length > 0 && Engine.IsDshHarness(p.Id);
                 report.Add("WMI 命令行读取: " + (cmdline.Length > 0 ? "成功" : "失败"));
                 report.Add("身份识别 (IsDshHarness): " + (identityOk ? "通过 ✓" : "FAIL"));
+                // 局域网共享资源与探测检查
+                string gwPath = LanAccess.WriteGateway();
+                report.Add("lan-gateway.mjs: " + (gwPath.Length > 0 ? "已释放 ✓" : "FAIL: 资源缺失"));
+                // PWA 图标资源检查（二维码/手机端图标依赖）
+                string iconB64 = LauncherForm.LoadWhaleIconB64();
+                report.Add("whale-256.png: " + (iconB64.Length > 0 ? "已内嵌 ✓" : "FAIL: 资源缺失"));
+                string lanIpT; string lanNameT; bool lanWT;
+                lanIpT = LanAccess.DetectLanIp(out lanNameT, out lanWT);
+                report.Add("局域网 IP 探测: " + (lanIpT.Length > 0 ? lanIpT + "（" + lanNameT + "）" : "未检测到活动 WiFi/以太网"));
+                report.Add("PIN 解析: " + (LanAccess.EffectivePin(out lanNameT).Length > 0 ? "可用" : "将自动生成"));
                 p.OutputDataReceived += delegate(object o, DataReceivedEventArgs e)
                 {
                     if (e.Data != null) { lock (sb) { AppendTrim(sb, e.Data); } }
@@ -2173,20 +3229,26 @@ namespace DSHLauncher
 
                 report.Add("");
                 report.Add((ready && freed) ? "==== 自检通过 ====" : "==== 自检失败 ====");
-                File.WriteAllLines(logPath, report.ToArray(), new UTF8Encoding(true));
+                WriteReport(logPath, report);
                 return (ready && freed && identityOk) ? 0 : 1;
             }
             catch (Exception ex)
             {
                 report.Add("异常: " + ex.ToString());
-                File.WriteAllLines(logPath, report.ToArray(), new UTF8Encoding(true));
+                WriteReport(logPath, report);
                 return 1;
+            }
+            finally
+            {
+                // 清理自检临时工作目录，避免残留
+                try { Directory.Delete(Path.Combine(Path.GetTempPath(), "dsh-launcher-selftest"), true); } catch { }
             }
         }
 
         private static void AppendTrim(StringBuilder sb, string line)
         {
-            sb.AppendLine(Engine.Sanitize(line));
+            // 自检报告同样脱敏：dsh 输出含一次性 token URL，不能明文写入 selftest.log
+            sb.AppendLine(Engine.RedactSecrets(Engine.Sanitize(line)));
             if (sb.Length > 16000) sb.Remove(0, sb.Length - 16000);
         }
 

@@ -20,16 +20,19 @@ if (-not (Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30
 if (-not (Test-Path $csc)) { throw "未找到 csc.exe" }
 
 # ---------- 4. 编译安装包（内嵌启动器、WebView2 运行库与图标） ----------
+# 注意：资源参数必须整体加引号（"/resource:<路径>,<标识符>"）。
+# 若写成 /resource:"<路径>",<标识符>，PowerShell 7 传递原生参数时引号处理与
+# csc 的 /resource: 解析不兼容（csc 会把引号当文件名的一部分），导致 CS1566。
 Write-Host "编译 DSHLauncherSetup.exe ..."
 & $csc /nologo /target:winexe /optimize+ /codepage:65001 `
-    /win32icon:"$here\app.ico" `
-    /out:"$here\DSHLauncherSetup.exe" `
-    /resource:"$here\DSHLauncher.exe",DSHLauncher.exe `
-    /resource:"$here\app.ico",app.ico `
-    /resource:"$here\lib\Microsoft.Web.WebView2.Core.dll",Microsoft.Web.WebView2.Core.dll `
-    /resource:"$here\lib\Microsoft.Web.WebView2.WinForms.dll",Microsoft.Web.WebView2.WinForms.dll `
-    /resource:"$here\lib\WebView2Loader.dll",WebView2Loader.dll `
-    /resource:"$here\README.md",README.md `
+    "/win32icon:$here\app.ico" `
+    "/out:$here\DSHLauncherSetup.exe" `
+    "/resource:$here\DSHLauncher.exe,DSHLauncher.exe" `
+    "/resource:$here\app.ico,app.ico" `
+    "/resource:$here\lib\Microsoft.Web.WebView2.Core.dll,Microsoft.Web.WebView2.Core.dll" `
+    "/resource:$here\lib\Microsoft.Web.WebView2.WinForms.dll,Microsoft.Web.WebView2.WinForms.dll" `
+    "/resource:$here\lib\WebView2Loader.dll,WebView2Loader.dll" `
+    "/resource:$here\README.md,README.md" `
     /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
     "$here\DSHLauncherSetup.cs"
 

@@ -4,7 +4,7 @@
 
 A Windows desktop launcher for **DeepSeek Harness**: double-click to automatically start the dsh web service and view Harness directly in an embedded **WebView2** window — no browser needed, used like a native app.
 
-**作者 / Author: [KristoffersonLee](https://github.com/)** · v2.0.0
+**作者 / Author: [KristoffersonLee](https://github.com/)** · v3.0.0
 
 > ⚠️ **重要说明 / Important Notice**
 >
@@ -52,6 +52,16 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
 - 📝 **日志文件**：`%LOCALAPPDATA%\DSHLauncher\logs\launcher.log`（超 2MB 自动裁剪）
 - 🗂️ **托盘菜单**：打开界面 / 刷新 / 浏览器打开 / 启动 / 停止 / 新手指引 / 打开日志目录 / 设置 / 关于 / 退出
 - 🧩 **零依赖分发**：单文件安装包内嵌启动器与 WebView2 运行库，自动部署缺失环境（Node.js / dsh / WebView2 运行时）
+- 📡 **局域网共享与手机端（v3.0）**：手机/平板在同一 WiFi 下扫码即可访问；默认关闭，行为与旧版完全一致
+  - 只绑定当前活跃的 WiFi/以太网**具体 IP**（绝不绑定 0.0.0.0），自动打印地址并生成二维码（qrcode.js）
+  - **全新独立移动端 UI**（非 dsh 原生界面）：会话列表（按工作区分组折叠）+ 完整聊天（历史消息、上滑加载更早、对话大纲导航、底部输入栏）
+  - **手机端只读模式**：不能新建会话 / 切换或添加工作区（前端隐藏 + 后端 API 拦截双重保障）
+  - **会话列表智能过滤**：手机端只显示顶级用户会话（自动隐藏归档 / 子代理 / 空白会话，与桌面端一致）
+  - **归档会话彻底清理**：设置面板一键删除归档会话的全部历史数据（聊天记录、文件引用，不可恢复；重启生效）
+  - **PIN/Token 门禁**（HttpOnly Cookie，重生成 PIN 自动踢出所有设备）+ **速率限制** + 会话密钥轮换
+  - 零依赖 Node 网关（内嵌资源），SSE / WebSocket 流式透传，PWA 增强（manifest / SW / 添加到主屏幕，SW 版本随机化自动刷新缓存）
+  - Windows 防火墙自动放行（`remoteip=localsubnet`，仅局域网）；无管理员权限时给出可复制的手动命令
+  - 开启局域网后自动为 dsh 进程设置 `OLLAMA_HOST=0.0.0.0`、`OLLAMA_ORIGINS=*`（使用 Ollama 本地推理时生效）
 
 ## 安装
 
@@ -68,6 +78,88 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
 2. 服务自动启动，内嵌窗口弹出显示 Harness 界面；控制面板不闪现，程序只以托盘图标存在。
 3. 点 ✕ 收进托盘（勾选"关闭时最小化到托盘"时）；未勾选则询问是否停止服务后真正退出。
 4. 菜单栏"设置"打开设置窗口；"帮助 → 使用文档"打开内置新手指引；"打开日志目录"直达日志文件夹。
+5. （可选）设置窗口 →「局域网共享」→ 勾选"允许局域网访问"，确认提示后即可用手机扫码使用。
+
+## 局域网共享（手机 / 平板扫码访问）
+
+> 原理：**手机连接的是启动器内嵌的 Web 网关，而不是 WebView2 界面**。网关（`lan-gateway.mjs`，
+> 零依赖 Node 实现，随启动器内嵌）把 `dsh web`（默认仅监听 127.0.0.1）安全地暴露给同一 WiFi。
+
+### 开启步骤
+
+1. 打开设置窗口 →「局域网共享」→ 勾选"允许局域网访问（默认关闭）"。
+2. 首次开启会弹出确认框（请确保处于可信网络，如家庭 WiFi，不要在公共网络开启），确认后：
+   - 自动检测活动网卡 IP（优先 WiFi/以太网，排除 VPN/虚拟网卡）并绑定该具体 IP；
+   - **访问 PIN 可自定义**：在「局域网共享」面板的“访问密码 (PIN)”输入框填写自定义 PIN 并失焦即保存
+     （也可通过环境变量 / `.env` 的 `DSH_LAN_PIN` 指定，禁止硬编码）；留空则自动生成 6 位 PIN；
+   - 自动尝试添加防火墙规则（仅本地子网），无管理员权限时在面板显示可复制的手动命令；
+   - 面板显示完整地址 `http://<IP>:<端口>/` 与二维码（qrcode.js 渲染）。
+3. 手机连同一 WiFi，用相机 / 微信扫描二维码 → 输入 PIN → 进入**全新移动端专属 UI**（非 dsh 原生界面）：
+   - **会话列表**：按工作区分组、可折叠；只显示顶级用户会话（自动隐藏归档 / 子代理 / 空白会话）；
+   - **聊天**：历史消息加载、上滑加载更早、对话大纲（≡ 导航）跳转任意节点、底部输入栏发送消息；
+   - **只读模式**：手机端不能新建会话 / 切换或添加工作区（界面隐藏 + 网关 API 拦截双重保障）；
+   - 首次访问后写入 HttpOnly Cookie（30 天），后续免密；重新生成 PIN 会踢出所有设备；
+   - 支持添加到主屏幕（PWA 增强，iOS 直接支持）；缓存由随机化 SW 版本自动刷新。
+4. **彻底清理归档会话**：电脑端设置 →「清理归档会话」→ 删除归档会话的全部历史数据（聊天记录、文件引用，不可恢复；重启生效），手机端同步消失。
+5. 关闭开关后，网关立即停止、防火墙规则清理，手机将**连接被拒绝**。
+
+### 安全机制
+
+- **默认关闭，显式开启**：开关默认关闭，关闭状态下手机无法访问，行为与升级前完全一致；
+- **PIN 门禁**：首次访问必须输入 PIN（环境变量 → 启动器目录 `.env` → `%APPDATA%\.env` → lan-pin.txt 4 级解析，绝不硬编码），
+  验证通过写入 `HttpOnly; SameSite=Strict` Cookie；
+- **速率限制**：按来源 IP 滑窗计数（整体 / API / 登录分别限流，可调），超限返回 429；
+- **最小暴露面**：网关只绑定检测到的具体局域网 IP，不绑定 0.0.0.0；防火墙规则限定 `remoteip=localsubnet`；
+- **双层认证**：网关 PIN 之外，dsh 自身的启动令牌认证依然生效（网关自动兑换，手机无感知）。
+
+### Windows 防火墙（自动 + 手动）
+
+开启时自动执行（无需管理员时可能失败）：
+
+```powershell
+netsh advfirewall firewall add rule name="DSHLauncher LAN 3081" dir=in action=allow protocol=TCP localport=3081 remoteip=localsubnet
+```
+
+若自动配置失败（无管理员权限），在面板复制手动命令，或以管理员身份运行 PowerShell 执行：可用面板的
+「以管理员身份配置防火墙」按钮（触发 UAC），或手动运行：
+
+```powershell
+# 放行（管理员 PowerShell）
+netsh advfirewall firewall add rule name="DSHLauncher LAN 3081" dir=in action=allow protocol=TCP localport=3081 remoteip=localsubnet
+# 关闭时清理
+netsh advfirewall firewall delete rule name="DSHLauncher LAN 3081"
+# 查看是否已存在
+netsh advfirewall firewall show rule name="DSHLauncher LAN 3081"
+```
+
+> 💡 请把当前 WiFi 网络设置为「专用」网络（设置 → 网络和 Internet → 属性），`remoteip=localsubnet` 规则
+> 配合专用网络配置可进一步降低暴露面。
+
+### 使用 Ollama 本地推理
+
+开启局域网后，启动器会自动为 dsh 进程设置 `OLLAMA_HOST=0.0.0.0`、`OLLAMA_ORIGINS=*`，
+使模型接口可被局域网内的网关调用（无论是否真的使用 Ollama 都会设置，设置面板会提示已检测到 Ollama）。手动启动 Ollama 时：
+
+```powershell
+$env:OLLAMA_HOST = "0.0.0.0"
+$env:OLLAMA_ORIGINS = "*"
+ollama serve
+```
+
+### 手机端测试验证步骤
+
+1. 电脑开启「局域网共享」，记下地址（如 `http://192.168.5.5:3081/`）与 PIN；
+2. 手机连同一 WiFi，浏览器（或相机扫码）打开该地址 → 应出现 PIN 登录页；
+3. 输入错误 PIN → 提示密码错误；输入正确 PIN → 自动进入**全新移动端专属 UI**；
+4. 会话列表按工作区分组、可折叠，只显示顶级用户会话（无归档/子代理/空白；分组名与会话标题最多两行完整显示）；
+5. 点任一会话 → 进入聊天：历史消息、上滑加载更早、≡ 大纲跳转对话节点、底部输入栏发送消息（消息自动滚动）；
+6. 尝试新建会话 / 切换工作区 → 被网关拒绝（只读模式提示）；
+7. 手机锁屏再开、旋转横屏 → 布局正常，输入框不被键盘遮挡；
+8. iOS「添加到主屏幕」/ Android 菜单「添加到主屏幕」→ 以类原生窗口打开；
+9. 电脑端设置「清理归档会话」→ 归档会话及其数据彻底删除，手机端同步消失；
+10. 电脑端关闭「局域网访问」→ 手机刷新 → 连接被拒绝 / 超时（无法访问）；
+11. 电脑端启动器**退出**后（保留服务）→ 手机刷新仍可访问（网关继续运行）；
+12. 默认状态（开关关闭）→ 手机无法访问，电脑端行为与升级前完全一致。
 
 ## 环境要求
 
@@ -101,11 +193,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-setup.ps1  # 构建安
 ## 目录结构
 
 ```
-DSHLauncher.cs / DSHLauncherSetup.cs   源码（.NET Framework 4.x WinForms，C# 5）
-build.ps1 / build-setup.ps1            构建脚本（系统自带 csc，零依赖编译）
-make-icon.ps1 / app.ico / assets/      图标生成与资源（官方 DeepSeek 鲸鱼 LOGO）
+DSHLauncher.cs / LanAccess.cs           启动器源码与局域网辅助层（.NET Framework 4.x WinForms，C# 5）
+DSHLauncherSetup.cs                    一键安装包源码
+lan-gateway.mjs                        局域网网关（零依赖 Node，构建时内嵌为资源）
+build.ps1 / build-setup.ps1            构建脚本（系统自带 csc，零依赖编译；内嵌 lan-gateway.mjs 与图标）
+make-icon.ps1 / app.ico / whale-256.png / assets/
+                                        图标生成与资源（官方 DeepSeek 鲸鱼 LOGO；whale-256.png 内嵌为手机端 PWA 图标）
 lib/                                   WebView2 SDK 官方 DLL（MIT 许可）
 selftest.ps1                           自检脚本
+uninstall.cmd                          卸载脚本（安装目录内的同名文件由安装包生成，本文件为仓库模板）
 README.md / LICENSE                    本文件（含升级与维护手册）与许可证
 ```
 
@@ -285,6 +381,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 |---|---|
 | `npm ls -g` 里 `UNMET OPTIONAL DEPENDENCY @img/sharp-*`（darwin/linux/freebsd） | Windows 本就不装，正常 |
 | `EPERM` 写 `cordis.yml` | 通常是有另一实例占用端口/沙箱限制，非配置损坏 |
+| 局域网共享打不开 / 手机 401 | 见「局域网共享」章节：检查开关、PIN、防火墙规则；`%LOCALAPPDATA%\DSHLauncher\logs\lan-gateway.log` 排障 |
 | `npm warn cleanup Failed to remove .dsh-*` | 临时目录被运行中进程锁定，重启后可删 |
 
 ### 1.6 启动器行为说明
@@ -323,7 +420,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | @deepseek-ai/dsh | **0.1.2-alpha.2**（npm `alpha` 标签；latest/next = 0.1.1-rc.2） | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
 | Git | 2.55.0.4 | WinGet MinGit |
 | Python | 3.13.15 | `C:\Users\20183\Local\Programs\Python\Python313` |
-| DSHLauncher | v2.0.0（含 token 认证适配与退出保留服务） | `D:\DSHLauncher` |
+| DSHLauncher | v3.0.0（局域网共享 + 全新手机端 UI + 只读模式 + 归档清理） | `D:\DSHLauncher` |
 
 **Agent 与模型 API 引用**
 
@@ -360,6 +457,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 0.1.1-rc.2 | latest/next | JSONL 会话后端默认压缩改 `zstd`（注意混编码崩溃，故障 C）；内置 DeepSeek 模型目录（flash/pro/vision-exp） |
 | 0.1.2-alpha.1 | （GitHub，未上架 npm） | **APIProxy 移除 → @Remote 网关**；pi-ai 模型支持更新 + vLLM 思考预算；统一 `dsh` Profile 启动；WebFetch 默认开启（SSRF 防护） |
 | 0.1.2-alpha.2 | alpha（npm） | 含 alpha.1 全部变更；**Web 界面强制一次性 token 认证**（故障 D，启动器已适配）；恢复 `SessionEvent.ignorable`；RemoteError 统一封装；Node 24 启动修复 |
+| 启动器 v3.0.0 | — | 局域网共享与全新手机端专属 UI（非 dsh 原生）：会话分组折叠、聊天（历史/加载更早/大纲导航）、只读模式（前端隐藏 + 网关 API 拦截）、会话过滤（归档/子代理/空白）、归档会话一键彻底清理、PIN 轮换踢出所有设备、SW 随机化自动刷缓存 |
 
 > 核对命令：`npm view @deepseek-ai/dsh dist-tags`；发布说明见 `https://github.com/deepseek-ai/deepseek-harness/releases`。
 
@@ -414,6 +512,16 @@ DeepSeek Harness is a web application (React frontend + Node.js service) that is
 - 📝 **Log file**: `%LOCALAPPDATA%\DSHLauncher\logs\launcher.log` (auto-trimmed beyond 2 MB)
 - 🗂️ **Tray menu**: open / refresh / open in browser / start / stop / guide / open log folder / settings / about / quit
 - 🧩 **Zero-dependency distribution**: single-file installer embeds the launcher and WebView2 runtime, auto-deploys missing prerequisites (Node.js / dsh / WebView2 Runtime)
+- 📡 **LAN sharing & mobile UI (v3.0)**: phones/tablets on the same WiFi scan a QR code — OFF by default, identical to the old behavior when disabled
+  - binds only the detected active WiFi/Ethernet **specific IP** (never 0.0.0.0), prints the address and renders a QR code (qrcode.js)
+  - **brand-new standalone mobile UI** (not the dsh native UI): session list grouped by workspace (collapsible) + full chat (history, load-earlier on scroll, conversation outline nav, bottom composer)
+  - **mobile read-only mode**: no new sessions / no workspace switch or add (hidden in UI + blocked at the gateway API, double protection)
+  - **smart session filtering**: mobile shows only top-level user sessions (archived/subagent/blank hidden, matching the desktop)
+  - **one-click archived-session purge** in Settings: deletes all archived session data from disk (chat history & file refs, **not recoverable**; takes effect after service restart)
+  - PIN/Token gate (HttpOnly cookie; regenerating the PIN revokes every device) + per-IP rate limiting + session-secret rotation
+  - zero-dependency Node gateway (embedded resource), SSE/WebSocket passthrough, PWA (manifest/SW/add-to-homescreen, randomized SW version auto-flushes caches)
+  - auto Windows Firewall rule scoped to `remoteip=localsubnet`; copyable manual commands when elevation is missing
+  - when LAN is enabled, sets `OLLAMA_HOST=0.0.0.0` and `OLLAMA_ORIGINS=*` for the dsh process (for local Ollama inference)
 
 ## Installation
 
@@ -683,7 +791,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | @deepseek-ai/dsh | **0.1.2-alpha.2** (npm `alpha` tag; latest/next = 0.1.1-rc.2) | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
 | Git | 2.55.0.4 | WinGet MinGit |
 | Python | 3.13.15 | `C:\Users\20183\Local\Programs\Python\Python313` |
-| DSHLauncher | v2.0.0 (token-auth adaptation & keep-service-on-exit) | `D:\DSHLauncher` |
+| DSHLauncher | v3.0.0 (LAN sharing + standalone mobile UI + read-only mode + archive purge) | `D:\DSHLauncher` |
 
 **Agent & model API references**
 
@@ -736,3 +844,4 @@ Credential / API key references (secrets live in `C:\Users\20183\.dsh\.credentia
 | 2026-08-31 | dsh 0.1.1-rc.2 → **0.1.2-alpha.2** (npm alpha tag); token-auth breaking change → launcher adaptation (Failure D) | ✅ |
 | 2026-08-31 (fix) | launcher behavior fix: exit keeps dsh web running (web stays connected); adoption relies on 30-day cookie | ✅ |
 | 2026-08-31 (p2) | version bumped to v2.0.0; manual merged into README (single document shipped); installer ships README; portable uninstaller | ✅ |
+| 2026-09-01 | v2.0.0 → **v3.0.0**：局域网共享 + 全新手机端专属 UI（会话分组/聊天/只读模式/会话过滤/归档清理）；版本号一致性检查并更新 README | ✅ |

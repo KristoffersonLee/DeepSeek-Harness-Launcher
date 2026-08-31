@@ -1,4 +1,7 @@
 @echo off
+rem 注意：本文件是仓库模板（绿色版/仓库根自卸载用）；安装目录内的 uninstall.cmd 由
+rem 安装包（DSHLauncherSetup.cs 的 WriteUninstallCmd）按安装路径动态生成，逻辑与本文件一致。
+rem 若修改本文件，请同步更新 DSHLauncherSetup.cs 中的生成逻辑。
 chcp 65001 >nul
 rem 通用卸载脚本：基于自身所在目录（%~dp0），可在任意安装位置工作
 set "APP_DIR=%~dp0"

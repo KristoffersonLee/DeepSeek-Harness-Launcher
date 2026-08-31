@@ -3,9 +3,10 @@
 //       → 完成页(启动应用/创建桌面图标/新手指引)
 // 命令行: --silent-install [目录]  静默安装(写 setup.log, 退出码 0/1)
 //         --detect-only            只检测环境(写 setup.detect.log)
-// 构建: build-setup.ps1（内嵌 DSHLauncher.exe 与 app.ico，单文件分发）
+// 构建: build-setup.ps1（内嵌 DSHLauncher.exe、app.ico、WebView2 三个运行库与 README.md，单文件分发）
 // 作者: KristoffersonLee
-// 兼容 C# 5（系统自带 csc v4.0.30319）。
+// 兼容 C# 5（系统自带 csc v4.0.30319；注意 StandardOutputEncoding 需 .NET 4.5+ 运行时，
+//        Win10/11 自带 4.8，兼容 4.0 目标即可）。
 
 using System;
 using System.Collections.Generic;
@@ -25,7 +26,7 @@ namespace DSHSetup
     internal static class Program
     {
         public const string AppName = "DeepSeek Harness Launcher";
-        public const string AppVersion = "2.0.0";
+        public const string AppVersion = "3.0.0";
         public const string InstallSubDir = "DSHLauncher";
         public const string ShortcutName = "DeepSeek Harness Launcher";
 
@@ -39,6 +40,14 @@ namespace DSHSetup
             {
                 string dir = (args.Length > 1 && args[1].Trim().Length > 0)
                     ? args[1].Trim() : DefaultInstallDir();
+                try { dir = Path.GetFullPath(dir); }
+                catch { Console.Error.WriteLine("无效的安装目录: " + dir); return 2; }
+                // 拒绝安装到盘符根目录（卸载守卫同样拒绝删除，会留下垃圾）
+                if (Regex.IsMatch(dir, @"^[A-Za-z]:\\?$"))
+                {
+                    Console.Error.WriteLine("拒绝安装到盘符根目录: " + dir);
+                    return 2;
+                }
                 return SilentInstall.Run(dir);
             }
             if (args.Length > 0 && args[0] == "--detect-only")
@@ -61,6 +70,9 @@ namespace DSHSetup
     // ---------------------------------------------------------------------
     internal static class Env
     {
+        // 部署类子进程最长等待时间（winget / MSI / npm / WebView2 引导程序）
+        public const int DeployTimeoutMs = 600000;
+
         public static string NodePath = "";
         public static string BinJs = "";
         public static string NpmPath = "";
@@ -73,6 +85,9 @@ namespace DSHSetup
         {
             NodePath = ""; BinJs = ""; NpmPath = "";
             WebView2Ok = CheckWebView2();
+            // 合并机器级 PATH：winget/MSI 安装 Node 写的是机器 PATH，当前进程环境不会自动刷新，
+            // 不合并会导致“部署成功但检测失败”
+            MergeMachinePath();
 
             // 1) node.exe
             foreach (string dir in SplitPath())
@@ -86,10 +101,24 @@ namespace DSHSetup
                 string p = Path.Combine(la, "nodejs");
                 if (Directory.Exists(p))
                 {
+                    // 多版本共存时选版本号最大者（NTFS 目录枚举顺序不保证版本序）；
+                    // 目录名形如 node-v22.14.0 或 node-v22.14.0-win-x64，取版本前缀比较
+                    Version best = null;
+                    string bestDir = null;
                     foreach (string d in Directory.GetDirectories(p, "node-v*"))
                     {
-                        string cand = Path.Combine(d, "node.exe");
-                        if (File.Exists(cand)) { NodePath = cand; break; }
+                        Match vm = Regex.Match(Path.GetFileName(d), @"^node-v(\d+)\.(\d+)\.(\d+)");
+                        if (!vm.Success) continue;
+                        Version v = new Version(
+                            int.Parse(vm.Groups[1].Value),
+                            int.Parse(vm.Groups[2].Value),
+                            int.Parse(vm.Groups[3].Value));
+                        if (best == null || v > best) { best = v; bestDir = d; }
+                    }
+                    if (bestDir != null)
+                    {
+                        string cand = Path.Combine(bestDir, "node.exe");
+                        if (File.Exists(cand)) NodePath = cand;
                     }
                     if (NodePath.Length == 0)
                     {
@@ -136,6 +165,25 @@ namespace DSHSetup
             }
         }
 
+        // 合并机器级 PATH（HKLM\...\Session Manager\Environment）到当前进程环境
+        private static void MergeMachinePath()
+        {
+            try
+            {
+                object mp = Registry.GetValue(
+                    @"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "Path", null);
+                if (mp == null) return;
+                string machine = mp.ToString();
+                if (machine.Length == 0) return;
+                string cur = Environment.GetEnvironmentVariable("PATH") ?? "";
+                if (cur.IndexOf(machine, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    Environment.SetEnvironmentVariable("PATH", cur + ";" + machine);
+                }
+            }
+            catch { }
+        }
+
         // WebView2 运行时检测：注册表版本号 + 磁盘 msedgewebview2.exe 双保险
         private static bool CheckWebView2()
         {
@@ -179,7 +227,7 @@ namespace DSHSetup
                 log("使用 winget 安装 Node.js LTS（可能弹出 UAC 授权，请允许）…");
                 int code = RunProcess(winget,
                     "install --id OpenJS.NodeJS.LTS --exact --silent --accept-package-agreements --accept-source-agreements",
-                    "", log, 600000);
+                    "", log, DeployTimeoutMs);
                 if (code == 0)
                 {
                     Detect();
@@ -195,14 +243,18 @@ namespace DSHSetup
             {
                 string msiUrl = GetNodeMsiUrl();
                 if (msiUrl.Length == 0) { log("无法确定 Node.js 下载地址。"); return false; }
-                string msi = Path.Combine(Path.GetTempPath(), "node-lts-setup.msi");
+                // 随机临时文件名，避免并发/残留互相覆盖
+                string msi = Path.Combine(Path.GetTempPath(),
+                    "node-lts-setup-" + Process.GetCurrentProcess().Id + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".msi");
                 log("正在下载 " + msiUrl + " …");
-                using (WebClient wc = new WebClient())
+                if (!DownloadFileWithRetry(msiUrl, msi, log, MinNodeMsiBytes))
                 {
-                    wc.DownloadFile(msiUrl, msi);
+                    log("Node.js 下载失败，请检查网络后重试。");
+                    try { File.Delete(msi); } catch { }
+                    return false;
                 }
                 log("正在静默安装（可能需要几分钟）…");
-                int code = RunProcess("msiexec.exe", "/i \"" + msi + "\" /qn /norestart", "", log, 600000);
+                int code = RunProcess("msiexec.exe", "/i \"" + msi + "\" /qn /norestart", "", log, DeployTimeoutMs);
                 try { File.Delete(msi); } catch { }
                 if (code == 0)
                 {
@@ -232,10 +284,9 @@ namespace DSHSetup
             string arch = NodeMsiArch();
             try
             {
-                using (WebClient wc = new WebClient())
+                string json = DownloadStringWithRetry("https://nodejs.org/dist/index.json");
+                if (json != null)
                 {
-                    wc.Headers.Set("User-Agent", "DSHLauncherSetup");
-                    string json = wc.DownloadString("https://nodejs.org/dist/index.json");
                     // index.json 按版本倒序，第一个带 lts 代号（字符串）的即最新 LTS
                     Match m = Regex.Match(json,
                         "\"version\":\"v(\\d+\\.\\d+\\.\\d+)\"[^}]*?\"lts\":\"([^\"]*)\"");
@@ -247,26 +298,91 @@ namespace DSHSetup
                 }
             }
             catch { }
+            // 目录列表回退：nginx 目录按字典序排列，须收集全部匹配按版本号取最大，
+            // 否则会选到通道内最旧的补丁版
             string[] dists = new string[] { "latest-v24.x", "latest-v22.x" };
             foreach (string dist in dists)
             {
                 try
                 {
-                    using (WebClient wc = new WebClient())
+                    string html = DownloadStringWithRetry("https://nodejs.org/dist/" + dist + "/");
+                    if (html == null) continue;
+                    Version best = null;
+                    string bestName = null;
+                    foreach (Match mm in Regex.Matches(html,
+                        "node-v(\\d+)\\.(\\d+)\\.(\\d+)-" + arch + "\\.msi"))
                     {
-                        wc.Headers.Set("User-Agent", "DSHLauncherSetup");
-                        string html = wc.DownloadString("https://nodejs.org/dist/" + dist + "/");
-                        Match m = Regex.Match(html,
-                            "node-v(\\d+\\.\\d+\\.\\d+)-" + arch + "\\.msi");
-                        if (m.Success)
-                        {
-                            return "https://nodejs.org/dist/" + dist + "/" + m.Value;
-                        }
+                        Version v = new Version(
+                            int.Parse(mm.Groups[1].Value),
+                            int.Parse(mm.Groups[2].Value),
+                            int.Parse(mm.Groups[3].Value));
+                        if (best == null || v > best) { best = v; bestName = mm.Value; }
+                    }
+                    if (bestName != null)
+                    {
+                        return "https://nodejs.org/dist/" + dist + "/" + bestName;
                     }
                 }
                 catch { }
             }
             return "";
+        }
+
+        // 下载辅助：显式超时 + 最多 3 次退避重试 + 最小体积校验（弱网容错）。
+        // 用 HttpWebRequest（.NET 4.0 即支持 Timeout），避免 WebClient.Timeout 的 4.5+ 依赖
+        private const int DownloadTimeoutMs = 300000;
+        private const long MinNodeMsiBytes = 5 * 1024 * 1024; // Node MSI 约 30MB+，5MB 为兜底下限
+
+        private static string DownloadStringWithRetry(string url)
+        {
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                    req.UserAgent = "DSHLauncherSetup";
+                    req.Timeout = DownloadTimeoutMs;
+                    req.ReadWriteTimeout = DownloadTimeoutMs;
+                    using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                    using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                    {
+                        return sr.ReadToEnd();
+                    }
+                }
+                catch { if (attempt == 3) throw; }
+            }
+            return null;
+        }
+
+        private static bool DownloadFileWithRetry(string url, string dest, Action<string> log, long minBytes)
+        {
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    if (log != null && attempt > 1) log("下载失败，正在重试（第 " + attempt + " 次）…");
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                    req.UserAgent = "DSHLauncherSetup";
+                    req.Timeout = DownloadTimeoutMs;
+                    req.ReadWriteTimeout = DownloadTimeoutMs;
+                    using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                    using (Stream src = resp.GetResponseStream())
+                    using (FileStream fs = File.Create(dest))
+                    {
+                        byte[] buf = new byte[65536];
+                        int n;
+                        while ((n = src.Read(buf, 0, buf.Length)) > 0) fs.Write(buf, 0, n);
+                    }
+                    FileInfo fi = new FileInfo(dest);
+                    if (fi.Length >= minBytes) return true;
+                    if (log != null) log("下载文件体积异常（" + fi.Length + " 字节），重新下载…");
+                }
+                catch (Exception ex)
+                {
+                    if (log != null) log("下载失败：" + ex.Message);
+                }
+            }
+            return false;
         }
 
         // 一键部署 dsh：npm install -g（无权限时回退到当前用户目录安装）
@@ -279,7 +395,7 @@ namespace DSHSetup
             }
             log("使用 npm 安装 @deepseek-ai/dsh（可能需要一两分钟）…");
             int code = RunProcess(NpmPath, "install -g @deepseek-ai/dsh",
-                Path.GetDirectoryName(NpmPath), log, 600000);
+                Path.GetDirectoryName(NpmPath), log, DeployTimeoutMs);
             Detect();
             if (DshOk) { log("dsh 安装成功 ✓"); return true; }
             // 机器级 Node 时全局目录可能无写权限（EACCES）：改用当前用户目录 --prefix 重试
@@ -287,7 +403,7 @@ namespace DSHSetup
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm");
             log("默认全局安装未成功（npm 退出码 " + code + "），尝试安装到当前用户目录…");
             code = RunProcess(NpmPath, "install -g @deepseek-ai/dsh --prefix \"" + prefix + "\"",
-                Path.GetDirectoryName(NpmPath), log, 600000);
+                Path.GetDirectoryName(NpmPath), log, DeployTimeoutMs);
             Detect();
             if (DshOk) { log("dsh 安装成功 ✓（当前用户目录）"); return true; }
             log("dsh 安装未成功（npm 退出码 " + code + "）。");
@@ -300,14 +416,16 @@ namespace DSHSetup
             log("开始部署 WebView2 运行时…");
             try
             {
-                string boot = Path.Combine(Path.GetTempPath(), "webview2-bootstrapper.exe");
+                string boot = Path.Combine(Path.GetTempPath(),
+                    "webview2-bootstrapper-" + Process.GetCurrentProcess().Id + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".exe");
                 log("正在下载 WebView2 运行时引导程序…");
-                using (WebClient wc = new WebClient())
+                if (!DownloadFileWithRetry("https://go.microsoft.com/fwlink/p/?LinkId=2124703", boot, log, 512 * 1024))
                 {
-                    wc.DownloadFile("https://go.microsoft.com/fwlink/p/?LinkId=2124703", boot);
+                    log("WebView2 引导程序下载失败，请检查网络后重试。");
+                    return false;
                 }
                 log("正在静默安装（可能弹出 UAC 授权，请允许）…");
-                int code = RunProcess(boot, "/silent /install", "", log, 600000);
+                int code = RunProcess(boot, "/silent /install", "", log, DeployTimeoutMs);
                 try { File.Delete(boot); } catch { }
                 Detect();
                 if (WebView2Ok) { log("WebView2 运行时安装成功 ✓"); return true; }
@@ -402,6 +520,9 @@ namespace DSHSetup
         {
             if (dir == null || dir.Trim().Length == 0) dir = Program.DefaultInstallDir();
             string logPath = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "setup.log");
+            // 安装包位于只读目录时日志会静默丢失：先探测可写性，失败回退 %TEMP%
+            try { File.AppendAllText(logPath, ""); }
+            catch { logPath = Path.Combine(Path.GetTempPath(), "dshlauncher-setup.log"); }
             Action<string> log = delegate(string s)
             {
                 string t = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + s;
@@ -471,9 +592,9 @@ namespace DSHSetup
         public static void Install(string dir, Action<string> log, bool createShortcut)
         {
             StopLauncherInDir(dir, log); // 升级场景：先结束运行中的旧版，避免文件占用导致提取失败
-            Directory.CreateDirectory(dir);
             try
             {
+                Directory.CreateDirectory(dir);
                 ExtractResource("DSHLauncher.exe", Path.Combine(dir, "DSHLauncher.exe"));
                 ExtractResource("app.ico", Path.Combine(dir, "app.ico"));
                 // WebView2 内嵌模式运行库（内嵌进安装包，随安装释放）
@@ -484,19 +605,26 @@ namespace DSHSetup
                 ExtractResource("WebView2Loader.dll", Path.Combine(dir, "WebView2Loader.dll"));
                 // 随安装部署唯一文档 README.md（含升级与维护手册）
                 ExtractResource("README.md", Path.Combine(dir, "README.md"));
+                WriteUninstallCmd(dir);
+                RegisterUninstall(dir);
+                if (createShortcut) CreateShortcut(dir);
+                log("文件已复制到 " + dir);
             }
             catch (IOException ex)
             {
                 throw new IOException("安装文件写入失败：" + ex.Message
                     + "。若提示“正由另一进程使用”，请先关闭正在运行的 " + Program.AppName + " 后重试。");
             }
-            WriteUninstallCmd(dir);
-            RegisterUninstall(dir);
-            if (createShortcut) CreateShortcut(dir);
-            log("文件已复制到 " + dir);
+            catch (Exception ex)
+            {
+                throw new Exception("安装失败：" + ex.Message);
+            }
         }
 
-        // 仅当目标目录里已有正在运行的旧版启动器时结束它（避免误杀其它位置运行的实例）
+        // 仅当目标目录里已有正在运行的旧版启动器时结束它（避免误杀其它位置运行的实例）。
+        // 注意：只杀启动器本体，【不带 /T】——dsh web 服务与局域网网关是启动器的子进程，
+        // 按进程树强杀会把正在服务的 Harness 会话一起杀掉（浏览器端立即断开），
+        // 与 v2.0 起的“退出保留服务”语义冲突。
         private static void StopLauncherInDir(string dir, Action<string> log)
         {
             try
@@ -515,35 +643,46 @@ namespace DSHSetup
                     try
                     {
                         string tk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "taskkill.exe");
-                        ProcessStartInfo psi = new ProcessStartInfo(tk, "/PID " + p.Id + " /T /F");
+                        ProcessStartInfo psi = new ProcessStartInfo(tk, "/PID " + p.Id + " /F");
                         psi.UseShellExecute = false;
                         psi.CreateNoWindow = true;
                         using (Process kp = Process.Start(psi)) { if (kp != null) kp.WaitForExit(5000); }
                     }
                     catch { }
+                    // 等待进程真正退出，避免立即解压时文件仍被占用（taskkill /F 是异步生效的）
+                    for (int i = 0; i < 30; i++)
+                    {
+                        try { if (p.HasExited) break; } catch { break; }
+                        Thread.Sleep(100);
+                    }
                     try { p.Dispose(); } catch { }
                 }
             }
             catch { }
         }
 
+        // 原子解压：先写 .tmp 再覆盖，中途失败（磁盘满/占用）不会留下半截损坏文件
         private static void ExtractResource(string name, string outPath)
         {
+            string tmp = outPath + ".tmp";
             using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
             {
                 if (s == null) throw new Exception("内嵌资源缺失: " + name);
-                using (FileStream fs = File.Create(outPath))
+                using (FileStream fs = File.Create(tmp))
                 {
                     byte[] buf = new byte[65536];
                     int n;
                     while ((n = s.Read(buf, 0, buf.Length)) > 0) fs.Write(buf, 0, n);
                 }
             }
+            if (File.Exists(outPath)) File.Delete(outPath);
+            File.Move(tmp, outPath);
         }
 
         private static void WriteUninstallCmd(string dir)
         {
-            // UTF-8 + BOM 写入：cmd 按 UTF-8 解析，任意语言/特殊字符的路径都不会乱码
+            // 无 BOM 写入（内容纯 ASCII）：cmd.exe 不识别 UTF-8 BOM，
+            // 带 BOM 时首行会被解析为“ï»¿@echo off”报错且 @echo off 失效
             string p = dir.TrimEnd('\\');
             // 转义：单引号（PowerShell 字符串）、% （cmd 变量符，批处理中需写成 %%）
             string psEscape = p.Replace("'", "''").Replace("%", "%%");
@@ -565,28 +704,41 @@ namespace DSHSetup
                 "if (-not ($p -match '^[A-Za-z]:\\\\?$') -and $p -ne $env:WINDIR -and $p -ne $env:USERPROFILE) " +
                 "{ Remove-Item -LiteralPath $p -Recurse -Force }\"\r\n" +
                 "exit\r\n";
-            File.WriteAllText(Path.Combine(dir, "uninstall.cmd"), bat, new UTF8Encoding(true));
+            File.WriteAllText(Path.Combine(dir, "uninstall.cmd"), bat, new UTF8Encoding(false));
         }
 
         private static void RegisterUninstall(string dir)
         {
             if (dir == null || dir.Trim().Length == 0) return;
-            string key = @"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DSHLauncher";
-            string[] kv = new string[] {
-                "DisplayName", Program.AppName,
-                "DisplayVersion", Program.AppVersion,
-                "Publisher", "KristoffersonLee",
-                "InstallLocation", dir,
-                "DisplayIcon", Path.Combine(dir, "DSHLauncher.exe"),
-                "UninstallString", "\"" + Path.Combine(dir, "uninstall.cmd") + "\"",
-                "NoModify", "1",
-                "NoRepair", "1"
-            };
-            for (int i = 0; i < kv.Length; i += 2)
+            try
             {
-                Env.RunProcess("reg.exe", "add \"" + key + "\" /v " + kv[i] +
-                    " /t REG_SZ /d \"" + kv[i + 1] + "\" /f", "", null, 15000);
+                // 用 RegistryKey API 直写（毫秒级、可感知失败），替代串行 8 次 reg.exe 子进程
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DSHLauncher"))
+                {
+                    if (key == null) return;
+                    key.SetValue("DisplayName", Program.AppName);
+                    key.SetValue("DisplayVersion", Program.AppVersion);
+                    key.SetValue("Publisher", "KristoffersonLee");
+                    key.SetValue("InstallLocation", dir);
+                    key.SetValue("DisplayIcon", Path.Combine(dir, "DSHLauncher.exe"));
+                    key.SetValue("UninstallString", "\"" + Path.Combine(dir, "uninstall.cmd") + "\"");
+                    key.SetValue("NoModify", 1);
+                    key.SetValue("NoRepair", 1);
+                    // 估算大小（KB）：供“设置 → 应用”展示
+                    try
+                    {
+                        long est = 0;
+                        foreach (string f in Directory.GetFiles(dir))
+                        {
+                            try { est += new FileInfo(f).Length; } catch { }
+                        }
+                        key.SetValue("EstimatedSize", (int)(est / 1024));
+                    }
+                    catch { }
+                }
             }
+            catch { }
         }
 
         public static void CreateShortcut(string dir)
@@ -884,12 +1036,12 @@ namespace DSHSetup
             for (int i = 0; i < pages.Length; i++) pages[i].Visible = (i == n);
             btnBack.Visible = n > 0;
             btnBack.Enabled = !deploying && !(n == 3 && installDone);
-            btnNext.Enabled = !deploying && !(n == 3 && !installDone && !InstallRunning);
-            btnCancel.Enabled = !deploying && !InstallRunning;
+            btnNext.Enabled = !deploying && !(n == 3 && !installDone && !installing);
+            btnCancel.Enabled = !deploying && !installing;
             btnNext.Text = (n == pages.Length - 1) ? "完成" : "下一步";
             if (n == 1) RefreshEnv();
             if (n == 2) { installDir = txtInstallDir.Text.Trim(); }
-            if (n == 3 && !installDone && !InstallRunning) DoInstall();
+            if (n == 3 && !installDone && !installing) DoInstall();
             if (n == 4)
             {
                 lblInstalledDir.Text = "已安装到：" + installDir;
@@ -908,7 +1060,6 @@ namespace DSHSetup
             UpdateNextState();
         }
 
-        private bool InstallRunning { get { return installing; } }
         private bool installing = false;
 
         private void Go(int delta)
@@ -1040,34 +1191,53 @@ namespace DSHSetup
             installDir = txtInstallDir.Text.Trim();
             if (installDir.Length == 0) installDir = Program.DefaultInstallDir();
             lblInstallStatus.Text = "正在安装到 " + installDir + " …";
-            try
+            // 后台线程执行安装（资源解压 + 注册表写入可能耗时数秒）：
+            // 原实现在 UI 线程同步执行导致窗口“未响应”、进度条冻结，用户易误判死机而强杀
+            Thread t = new Thread(delegate()
             {
-                Installer.Install(installDir, delegate(string s)
+                bool ok = false;
+                string err = "";
+                try
                 {
-                    if (InvokeRequired) BeginInvoke((Action)(delegate { InstallLog(s); }));
-                    else InstallLog(s);
-                }, false);
-                installDone = true;
-                lblInstallStatus.Text = "安装完成 ✓";
-                lblInstallStatus.ForeColor = Color.FromArgb(46, 125, 50);
-            }
-            catch (Exception ex)
-            {
-                lblInstallStatus.Text = "安装失败";
-                lblInstallStatus.ForeColor = Color.FromArgb(198, 40, 40);
-                InstallLog("错误：" + ex.Message);
-            }
-            installing = false;
-            btnBack.Enabled = false; // 安装完成后不允许回退
-            btnNext.Enabled = true;
-            btnCancel.Enabled = true;
-            progBar.Style = ProgressBarStyle.Continuous;
-            progBar.Value = installDone ? 100 : 0;
+                    Installer.Install(installDir, delegate(string s)
+                    {
+                        if (InvokeRequired) BeginInvoke((Action)(delegate { InstallLog(s); }));
+                        else InstallLog(s);
+                    }, false);
+                    ok = true;
+                }
+                catch (Exception ex) { err = ex.Message; }
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        installing = false;
+                        installDone = ok;
+                        lblInstallStatus.Text = ok ? "安装完成 ✓" : "安装失败";
+                        lblInstallStatus.ForeColor = ok ? Color.FromArgb(46, 125, 50) : Color.FromArgb(198, 40, 40);
+                        if (!ok) InstallLog("错误：" + err);
+                        btnBack.Enabled = false; // 安装完成后不允许回退
+                        btnNext.Enabled = true;
+                        btnCancel.Enabled = true;
+                        progBar.Style = ProgressBarStyle.Continuous;
+                        progBar.Value = ok ? 100 : 0;
+                    });
+                }
+                catch { } // 窗体已关闭时静默丢弃
+            });
+            t.IsBackground = true;
+            t.Start();
         }
 
         private void InstallLog(string s)
         {
             txtInstallLog.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + s + "\r\n");
+            // 防无限增长：超过 20 万字符截掉最旧的一半
+            if (txtInstallLog.TextLength > 200000)
+            {
+                int cut = txtInstallLog.Text.IndexOf('\n', 100000);
+                if (cut > 0) { txtInstallLog.Select(0, cut + 1); txtInstallLog.SelectedText = ""; }
+            }
             txtInstallLog.SelectionStart = txtInstallLog.TextLength;
             txtInstallLog.ScrollToCaret();
         }
