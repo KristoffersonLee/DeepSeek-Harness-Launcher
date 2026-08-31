@@ -531,24 +531,25 @@ function fetchNavNodes(cb){
 function renderNav(){
   var list=$('#navList');
   var all=state.navNodes||[];
-  var show=all.slice(0,state.navPage);
+  var slice=all.slice(0,state.navPage); // 降序：最新的前 navPage 个
   var h='';
   if(all.length>0||state.navHasMore){
     h+='<div class="navCount">对话节点 '+all.length+' 个'+(state.navHasMore?' · 还有更早可加载':'')+'</div>';
   }
-  if(show.length===0){
+  // “加载更早对话”入口放在列表顶部（更早节点会插入到顶部）
+  if(state.navPage<all.length||state.navHasMore){
+    var label=state.navLoading?'正在加载…':'↑ 加载更早对话'+(state.navPage<all.length?('（已显示 '+slice.length+' / '+all.length+'）'):'');
+    h+='<div class="navMore" id="navMore">'+label+'</div>';
+  }
+  if(slice.length===0){
     if(state.navLoading){h+='<div class="navEmpty">正在加载节点…</div>';}
     else if(state.navHasMore){h+='<div class="navEmpty">正在定位更早的对话…</div>';}
     else{h+='<div class="navEmpty">暂无对话节点</div>';}
   }else{
-    show.forEach(function(n){
+    // 时间正序显示：最早在上、最新在下（与聊天记录阅读顺序一致）
+    slice.slice().reverse().forEach(function(n){
       h+='<div class="navItem" data-seq="'+n.seq+'"><span class="t">'+esc(n.text||'…')+'</span><span class="tm">'+fmt(Number(n.time)||Date.now())+'</span></div>';
     });
-  }
-  if(state.navPage<all.length||state.navHasMore){
-    var label=state.navLoading?'正在加载…':
-      (state.navPage<all.length?('↓ 加载更多节点（已显示 '+show.length+' / '+all.length+'）'):'↓ 加载更早对话');
-    h+='<div class="navMore" id="navMore">'+label+'</div>';
   }
   list.innerHTML=h;
 }
