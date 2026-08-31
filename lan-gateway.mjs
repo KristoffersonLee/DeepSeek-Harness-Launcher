@@ -419,7 +419,14 @@ function renderRecords(records,prepend){
     if(state.seenSeq[seq])return;
     if(t==='user/message'){
       state.seenSeq[seq]=1;
-      var ut=extractText(r.event.data&&r.event.data.content);
+      var d=r.event.data||{};
+      // 只显示真实用户输入（source.kind === 'user'，兼容无 source 的旧记录）。
+      // 跳过系统注入的 user/message：plugin / skill-catalog / skill-invocation /
+      // subagent-report / subagent-settled 等 —— 其中 subagent-settled 会携带
+      // 子代理的思考块与报告正文，若按普通用户消息渲染，聊天与右侧大纲都会混乱。
+      var sk=d.source&&d.source.kind;
+      if(sk&&sk!=='user')return;
+      var ut=extractText(d.content);
       if(ut)rows.push({seq:seq,role:'user',text:ut,time:r.event.time});
     }else if(t==='assistant/message'){
       state.seenSeq[seq]=1;
