@@ -27,9 +27,11 @@ const SECRET_FILE = env.DSH_LAN_SECRET_FILE || '';
 const LOG_FILE = env.DSH_LAN_LOG || '';
 const COOKIE_NAME = 'dsh_lan';
 const COOKIE_MAX_AGE = 30 * 24 * 3600; // 30 天
-const PIN_RATE = { limit: Number(env.DSH_LAN_LOGIN_LIMIT || 10), windowMs: 60000 };
-const API_RATE = { limit: Number(env.DSH_LAN_API_LIMIT || 180), windowMs: 60000 };
-const TOTAL_RATE = { limit: Number(env.DSH_LAN_TOTAL_LIMIT || 900), windowMs: 60000 };
+// 速率限制数值：非数字 env（NaN）会导致 b.count <= NaN 恒 false → 全部请求 429，必须校验回退
+function rateLimitValue(v, dflt) { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : dflt; }
+const PIN_RATE = { limit: rateLimitValue(env.DSH_LAN_LOGIN_LIMIT, 10), windowMs: 60000 };
+const API_RATE = { limit: rateLimitValue(env.DSH_LAN_API_LIMIT, 180), windowMs: 60000 };
+const TOTAL_RATE = { limit: rateLimitValue(env.DSH_LAN_TOTAL_LIMIT, 900), windowMs: 60000 };
 // PWA 图标：官方 DeepSeek 鲸鱼 LOGO（256x256 PNG，由启动器注入）
 const ICON_B64 = env.DSH_LAN_ICON_B64 || '';
 
@@ -155,8 +157,11 @@ function clientIp(req) {
 // ---------------- dsh 启动令牌兑换（进程级 Cookie 罐） ----------------
 let dshCookie = '';
 function readToken() {
+  // 优先读 token 文件：启动器会在 dsh 每次重打一次性 token 时刷新 lan-token.txt
+  // （DSHLauncher OnServerOutput），环境变量在网关启动时冻结，dsh 重启换新 token 后
+  // 继续用旧 env token 兑换会持续失败。
+  if (TOKEN_FILE) { try { const t = fs.readFileSync(TOKEN_FILE, 'utf8').trim(); if (t) return t; } catch { /* ignore */ } }
   if (env.DSH_LAN_TOKEN && env.DSH_LAN_TOKEN.length > 0) return env.DSH_LAN_TOKEN;
-  if (TOKEN_FILE) { try { return fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch { /* ignore */ } }
   return '';
 }
 function extractAuthCookie(setCookieHeaders) {
@@ -207,9 +212,10 @@ const MANIFEST = {
   background_color: '#0f1115',
   theme_color: '#0f1115',
   icons: [
+    // 实际图标为 256px 单源（whale-256.png 注入），声明 512 会与字节不符导致
+    // 部分浏览器拒绝/拉伸；统一按 192 声明（浏览器按声明尺寸缩放显示）
     { src: '/__lan/icon-192.png', sizes: '192x192', type: 'image/png' },
-    { src: '/__lan/icon-512.png', sizes: '512x512', type: 'image/png' },
-    { src: '/__lan/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+    { src: '/__lan/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' }
   ]
 };
 // SW 版本随机化：每次网关重启（如重新生成 PIN）产生新缓存名，SW 内容变化 →
@@ -370,7 +376,8 @@ function renderList(){
 /* 聊天 */
 function openChat(id,title){
   state.sessionId=id;state.title=title;state.seenSeq={};state.minSeq=Infinity;state.hasMore=true;
-  state.navNodes=null;state.navPage=60;state.navHasMore=false;state.navLoading=false;state.navCursor=-1;
+  // navHasMore 初始与聊天 hasMore 同步：DOM 节点 <60 时“加载更早”按钮也必须可达
+  state.navNodes=null;state.navPage=60;state.navHasMore=true;state.navLoading=false;state.navCursor=-1;
   $('#list').style.display='none';
   $('#chatView').style.display='flex';
   $('#chatTitle').textContent=title;
@@ -536,8 +543,9 @@ function renderNav(){
   if(all.length>0||state.navHasMore){
     h+='<div class="navCount">对话节点 '+all.length+' 个'+(state.navHasMore?' · 还有更早可加载':'')+'</div>';
   }
-  // “加载更早对话”入口放在列表顶部（更早节点会插入到顶部）
-  if(state.navPage<all.length||state.navHasMore){
+  // “加载更早对话”入口放在列表顶部（更早节点会插入到顶部）；
+  // 条件并入聊天侧 hasMore，确保历史大纲始终可达
+  if(state.navPage<all.length||state.navHasMore||state.hasMore){
     var label=state.navLoading?'正在加载…':'↑ 加载更早对话'+(state.navPage<all.length?('（已显示 '+slice.length+' / '+all.length+'）'):'');
     h+='<div class="navMore" id="navMore">'+label+'</div>';
   }
@@ -558,17 +566,24 @@ function loadMoreNav(){
   state.navLoading=true;
   renderNav();
   var finish=function(){state.navLoading=false;renderNav();};
+  // 追加节点前按 seq 去重：首次 fetchNavNodes 从 asOfSeq 取最新一页，会与 DOM 已渲染窗口重叠
+  var appendNodes=function(list){
+    if(!list.length)return;
+    var seen={};
+    state.navNodes.forEach(function(n){seen[n.seq]=1});
+    list.forEach(function(n){if(!seen[n.seq]){seen[n.seq]=1;state.navNodes.push(n);}});
+  };
   // 1) 已收集节点尚未显示完 → 直接展开下一页
   if(state.navPage<state.navNodes.length){state.navPage+=60;finish();return;}
   // 2) 已收集节点显示完 → 向前遍历历史（每次最多 3 页事件，控制请求量）
   var pages=3,got=0,more=[];
   var step=function(){
-    if(got>=pages){if(more.length)state.navNodes=state.navNodes.concat(more);state.navPage+=60;finish();return;}
+    if(got>=pages){appendNodes(more);state.navPage+=60;finish();return;}
     fetchNavNodes(function(nodes){
       got++;
       more=more.concat(nodes);
       if(state.navHasMore&&got<pages)step();
-      else{if(more.length)state.navNodes=state.navNodes.concat(more);state.navPage+=60;finish();}
+      else{appendNodes(more);state.navPage+=60;finish();}
     });
   };
   step();
@@ -595,12 +610,15 @@ function locateMsg(targetSeq){
   var step=function(){
     if(++guard>40){alert('未能定位到该消息（可能已到最早）');return;}
     if(tryScroll())return;
+    // 首屏尚未加载（minSeq=Infinity）：loadEarlier 会立即回调导致空转，先等首屏拉取完成
+    if(state.minSeq===Infinity){setTimeout(step,300);return;}
     if(!state.hasMore){alert('该消息尚未加载且已到最早');return;}
     loadEarlier(function(){
       if(tryScroll())return;
       step();
     });
   };
+  if(state.minSeq===Infinity)loadMessages(); // 触发首屏加载
   step();
 }
 $('#list').addEventListener('click',function(e){
@@ -648,11 +666,14 @@ function page(title, body, err) {
     '<h1>' + title + '</h1>' + body + '</div></body></html>';
 }
 function loginPage(errMsg) {
+  // PIN 纯数字时弹数字键盘；自定义 PIN 含字母时用通用键盘
+  var isNumericPin = /^\d+$/.test(readPin() || '');
+  var pinInputMode = isNumericPin ? 'numeric' : 'text';
   return page('局域网访问',
     '<div class="sub">请输入访问密码（PIN）<br>密码可在电脑端启动器「局域网共享」面板查看</div>' +
     '<form method="post" action="/__lan/login" autocomplete="off">' +
     '<label for="pin">访问密码</label>' +
-    '<input type="password" id="pin" name="pin" inputmode="numeric" autocomplete="current-password" required autofocus>' +
+    '<input type="password" id="pin" name="pin" inputmode="' + pinInputMode + '" autocomplete="current-password" required autofocus>' +
     '<button type="submit">进入 DeepSeek Harness</button></form>' +
     '<div class="err"' + (errMsg ? " style='display:block'" : '') + '>' + (errMsg || '') + '</div>' +
     '<div class="foot">仅限同一 WiFi（局域网）使用 · 请求受速率限制保护</div>');
@@ -798,9 +819,10 @@ function doProxy(req, res, body, retried, onJson) {
     try { noCacheHtml(res, 502, statusPage(502, 'Harness 服务未运行或暂不可用')); } catch { /* ignore */ }
   });
   proxy.on('response', (pres) => {
-    // dsh 令牌过期（401）且未重试：销毁当前响应 → 重新兑换 → 重发一次
+    // dsh 令牌过期（401）且未重试：此刻尚未向客户端写出任何字节，响应通道是干净的——
+    // 不能 res.destroy()（会掐断手机连接，重试响应永远到不了客户端）。
+    // 保持原 res，重新兑换令牌后在同一通道上重发一次（body 可重放）。
     if (!retried && pres.statusCode === 401) {
-      try { res.destroy(); } catch { /* ignore */ }
       destroyUpstream();
       log('目标返回 401，重新兑换 dsh 令牌后重试…');
       exchangeToken().then(() => {
@@ -810,6 +832,10 @@ function doProxy(req, res, body, retried, onJson) {
       return;
     }
     const ct = String(pres.headers['content-type'] || '');
+    // SSE 流式响应永不结束：清除上游空闲超时，避免模型静默期（心跳间隔 >30s）被掐断
+    if (ct.includes('text/event-stream')) {
+      try { proxy.setTimeout(0); } catch { /* ignore */ }
+    }
     const needCollect = ct.includes('text/html') || !!onJson;
     if (needCollect) {
       const hc = [];
@@ -857,7 +883,7 @@ function proxySessionListFiltered(req, res, body) {
   });
 }
 
-async function proxyWithRetry(req, res, retried) {
+async function proxyWithRetry(req, res) {
   const ip = clientIp(req);
   const rl = rateLimit(ip, 'total', TOTAL_RATE);
   if (!rl.ok) { noCacheHtml(res, 429, statusPage(429, '请求过于频繁，请稍后再试（' + rl.retryAfter + ' 秒）')); return; }
@@ -868,12 +894,12 @@ async function proxyWithRetry(req, res, retried) {
     if (interceptMobileDirectoryPick(req, res)) return;
   }
   await ensureDshCookie();
-  // 收集请求体（限 8MB），便于 401 重试时重放
+  // 收集请求体（限 8MB），便于 401 重试时重放（重试逻辑内聚在 doProxy）
   const chunks = [];
   let bodySize = 0;
   req.on('data', (c) => { chunks.push(c); bodySize += c.length; if (bodySize > 8 * 1024 * 1024) { req.destroy(); } });
   req.on('end', () => {
-    doProxy(req, res, Buffer.concat(chunks), !!retried, null);
+    doProxy(req, res, Buffer.concat(chunks), false, null);
   });
 }
 
@@ -1039,7 +1065,7 @@ const server = http.createServer((req, res) => {
     }
     return;
   }
-  proxyWithRetry(req, res, false);
+  proxyWithRetry(req, res);
 });
 
 server.on('upgrade', (req, socket, head) => {

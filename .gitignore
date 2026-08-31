@@ -7,7 +7,6 @@
 selftest.log
 setup.log
 setup.detect.log
-wv2-smoke.*
 
 # 根目录的 WebView2 运行库副本（由 build.ps1 从 lib\ 拷贝，入库以 lib\ 为准）
 /Microsoft.Web.WebView2.Core.dll

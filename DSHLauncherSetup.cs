@@ -1,7 +1,7 @@
 // DSHLauncherSetup.cs — DeepSeek Harness Launcher 一键安装包
 // 功能: 环境检测(Node.js/dsh) → 缺失一键部署(winget→MSI→npm) → 快速安装
 //       → 完成页(启动应用/创建桌面图标/新手指引)
-// 命令行: --silent-install [目录]  静默安装(写 setup.log, 退出码 0/1)
+// 命令行: --silent-install [目录]  静默安装(写 setup.log, 退出码 0=成功 1=失败 2=参数错误)
 //         --detect-only            只检测环境(写 setup.detect.log)
 // 构建: build-setup.ps1（内嵌 DSHLauncher.exe、app.ico、WebView2 三个运行库、
 //       README.md 与维护手册 MAINTENANCE.zh.md / MAINTENANCE.en.md，单文件分发）
@@ -665,21 +665,37 @@ namespace DSHSetup
         }
 
         // 原子解压：先写 .tmp 再覆盖，中途失败（磁盘满/占用）不会留下半截损坏文件
+        // 原子解压：先写 .tmp 再原子替换目标（File.Replace 同卷原子），
+        // 中途失败（磁盘满/占用）不会留下半截文件；失败路径清理 .tmp
         private static void ExtractResource(string name, string outPath)
         {
             string tmp = outPath + ".tmp";
-            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+            try
             {
-                if (s == null) throw new Exception("内嵌资源缺失: " + name);
-                using (FileStream fs = File.Create(tmp))
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
                 {
-                    byte[] buf = new byte[65536];
-                    int n;
-                    while ((n = s.Read(buf, 0, buf.Length)) > 0) fs.Write(buf, 0, n);
+                    if (s == null) throw new Exception("内嵌资源缺失: " + name);
+                    using (FileStream fs = File.Create(tmp))
+                    {
+                        byte[] buf = new byte[65536];
+                        int n;
+                        while ((n = s.Read(buf, 0, buf.Length)) > 0) fs.Write(buf, 0, n);
+                    }
+                }
+                if (File.Exists(outPath))
+                {
+                    File.Replace(tmp, outPath, null); // 原子替换（目标存在时）
+                }
+                else
+                {
+                    File.Move(tmp, outPath);
                 }
             }
-            if (File.Exists(outPath)) File.Delete(outPath);
-            File.Move(tmp, outPath);
+            catch
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                throw;
+            }
         }
 
         private static void WriteUninstallCmd(string dir)
@@ -692,7 +708,9 @@ namespace DSHSetup
             string bat =
                 "@echo off\r\n" +
                 "chcp 65001 >nul\r\n" +
-                // 结束运行中的旧版启动器：仅限本安装目录，避免误杀其它位置运行的实例
+                // 结束运行中的旧版启动器：仅限本安装目录，避免误杀其它位置运行的实例。
+                // 卸载为彻底清理场景，用 /T 按进程树强杀（连同其启动的 dsh web / 网关），
+                // 与升级安装（StopLauncherInDir 不带 /T、保留后台服务）语义不同，属有意设计
                 "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"" +
                 "Get-Process DSHLauncher -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '" +
                 psEscape + "\\*' } | ForEach-Object { & taskkill /PID $_.Id /T /F }\" >nul 2>&1\r\n" +

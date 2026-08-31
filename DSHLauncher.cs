@@ -101,7 +101,7 @@ namespace DSHLauncher
         public bool TrayOnClose = true; // 点叉时最小化到托盘（后台运行）
         public bool LanEnabled = false; // 局域网共享开关（默认关闭，显式开启）
         public int LanPort = 3081;      // 局域网网关端口（默认 3080 的下一位）
-        public string LanPin = "";      // 自定义访问 PIN（留空则自动生成，见 lan-pin.txt）
+        public string LanPin = "";      // 面板显示/提交用；生效 PIN 以 lan-pin.txt 为事实源（EffectivePin），本字段为面板展示的镜像
         public string NodePath = "";  // 可选: 手动指定 node.exe
         public string WorkDir = "";   // dsh 进程工作目录（决定 Harness 的 workspace）
 
@@ -495,8 +495,9 @@ namespace DSHLauncher
             if (string.IsNullOrEmpty(s)) return "";
             // ?token=xxx 或 &token=xxx（URL 查询参数形式）
             s = Regex.Replace(s, "[?&]token=[^&\\s\"']+", "?token=***", RegexOptions.IgnoreCase);
-            // “访问 PIN：123456” / “PIN: 123456”（中文/英文冒号均可）
-            s = Regex.Replace(s, "(?i)(访问\\s*)?pin\\s*[：:]\\s*[^\\s，。；）)\"']+", "$1PIN: ***");
+            // “访问 PIN：123456” / “PIN: 123456”（中文/英文冒号均可；允许引号紧跟冒号，
+            // 如 PIN: "123456"，整体脱敏）
+            s = Regex.Replace(s, "(?i)(访问\\s*)?pin\\s*[：:]\\s*[^\\s，。；）)]+", "$1PIN: ***");
             return s;
         }
     }
@@ -1195,7 +1196,8 @@ namespace DSHLauncher
 
         private void OnServerError(object sender, DataReceivedEventArgs e)
         {
-            if (!string.IsNullOrEmpty(e.Data)) Log("  [err] " + Engine.Sanitize(e.Data));
+            // 错误输出同样脱敏（可能包含 token/URL 片段）
+            if (!string.IsNullOrEmpty(e.Data)) Log("  [err] " + Engine.RedactSecrets(Engine.Sanitize(e.Data)));
         }
 
         private void OnStopClick(object sender, EventArgs e)
@@ -1531,7 +1533,8 @@ namespace DSHLauncher
         private void OnLanGatewayOutput(object sender, DataReceivedEventArgs e)
         {
             if (string.IsNullOrEmpty(e.Data)) return;
-            Log("  [lan] " + Engine.Sanitize(e.Data));
+            // 网关输出同样脱敏（防 PIN/token 相关字符串落盘）
+            Log("  [lan] " + Engine.RedactSecrets(Engine.Sanitize(e.Data)));
         }
 
         private static bool IsLanGatewayPid(int pid)
@@ -1695,9 +1698,6 @@ namespace DSHLauncher
                 lanPlainUrl = "http://" + ip + ":" + port + "/";
             }
 
-            bool wasRunning = settings.LanEnabled
-                && (lanGateway != null || lanExternalPid > 0);
-
             settings.LanPort = port;
             settings.LanEnabled = enabled;
             string oldPinSrc;
@@ -1716,16 +1716,30 @@ namespace DSHLauncher
                 try { if (File.Exists(LanAccess.PinFilePath)) File.Delete(LanAccess.PinFilePath); } catch { }
             }
             settings.Save();
-            // PIN 发生变化 → 轮换签名密钥，旧 Cookie 全部失效（手机需重新输入 PIN）
             string newPinSrc;
             string newEffectivePin = LanAccess.EffectivePin(out newPinSrc);
-            if (newEffectivePin.Length > 0 && newEffectivePin != oldEffectivePin)
+            // PIN 是否有实质变化：新生效值不同于旧值，或旧值被清空（清空 = 回到自动生成，
+            // 启动网关时才会生成新 PIN，此时旧 PIN 必须立即失效）
+            bool pinCleared = trimmedPin.Length == 0 && oldEffectivePin.Length > 0;
+            bool pinChanged = pinCleared
+                || (newEffectivePin.Length > 0 && newEffectivePin != oldEffectivePin);
+            if (pinChanged)
             {
+                // 轮换签名密钥，旧 Cookie 全部失效（手机需重新输入 PIN）
                 LanAccess.DeleteSecret();
             }
 
             if (enabled)
             {
+                // 端口或 PIN 变更且网关在运行：必须重启——运行中的网关持有启动时冻结的
+                // DSH_LAN_PIN 环境变量与内存中的旧签名密钥，不重启则旧 PIN/旧 Cookie 仍有效
+                bool restartNeeded = (portChanged || pinChanged)
+                    && (lanGateway != null || lanExternalPid > 0);
+                if (restartNeeded)
+                {
+                    Log((portChanged ? "局域网端口已变更" : "访问 PIN 已变更") + "，正在重启网关…");
+                    StopLanGateway();
+                }
                 StartLanGateway();
             }
             else
@@ -1733,12 +1747,6 @@ namespace DSHLauncher
                 StopLanGateway();
                 RemoveFirewallBestEffort();
                 Log("局域网共享已关闭，手机将无法访问。");
-            }
-            if (enabled && portChanged && wasRunning)
-            {
-                Log("局域网端口已变更，正在重启网关…");
-                StopLanGateway();
-                StartLanGateway();
             }
             return true;
         }

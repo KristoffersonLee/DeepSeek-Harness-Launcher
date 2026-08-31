@@ -6,7 +6,9 @@ chcp 65001 >nul
 rem 通用卸载脚本：基于自身所在目录（%~dp0），可在任意安装位置工作
 set "APP_DIR=%~dp0"
 if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
-rem 结束运行中的本目录启动器（仅限本安装目录，避免误杀其它位置实例）
+rem 结束运行中的本目录启动器（仅限本安装目录，避免误杀其它位置实例）。
+rem 注意：卸载是彻底清理场景，这里用 /T 按进程树强杀（连同其启动的 dsh web / 网关一并结束）；
+rem 这与升级安装（build.ps1 / StopLauncherInDir 不带 /T、保留后台服务）的语义不同，属有意设计。
 powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Get-Process DSHLauncher -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '%APP_DIR%\*' } | ForEach-Object { & taskkill /PID $_.Id /T /F }" >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DSHLauncher" /f >nul 2>&1
 del "%USERPROFILE%\Desktop\DSH Harness *.lnk" >nul 2>&1
