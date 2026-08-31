@@ -294,6 +294,10 @@ namespace DSHLauncher
             psi.CreateNoWindow = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
+            // dsh web 的 stdout/stderr 为 UTF-8：必须显式指定解码编码，
+            // 否则中文系统（GBK 代码页）按 ANSI 解码导致运行日志乱码
+            psi.StandardOutputEncoding = Encoding.UTF8;
+            psi.StandardErrorEncoding = Encoding.UTF8;
             if (Directory.Exists(workDir))
                 psi.WorkingDirectory = workDir;
             else
@@ -1490,6 +1494,9 @@ namespace DSHLauncher
             psi.CreateNoWindow = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
+            // lan-gateway.mjs 的 console.log 输出为 UTF-8：显式指定解码编码，避免运行日志中文乱码
+            psi.StandardOutputEncoding = Encoding.UTF8;
+            psi.StandardErrorEncoding = Encoding.UTF8;
             psi.WorkingDirectory = LanAccess.AppDataDir;
             psi.EnvironmentVariables["DSH_LAN_HOST"] = lanIp;
             psi.EnvironmentVariables["DSH_LAN_PORT"] = settings.LanPort.ToString();

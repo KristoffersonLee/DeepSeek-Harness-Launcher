@@ -315,6 +315,8 @@ footer b{color:#9aa7ff;font-weight:500}
 .navItem .t{font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .navItem .tm{font-size:11px;color:var(--sub)}
 .navEmpty{text-align:center;color:var(--sub);padding:40px 16px;font-size:13px}
+.navMore{padding:12px;margin:4px 10px 10px;border-radius:10px;background:rgba(77,107,254,.14);color:#9aa7ff;font-size:13.5px;text-align:center;cursor:pointer;flex:none}
+.navMore:active{background:rgba(77,107,254,.24)}
 </style>
 </head>
 <body>
@@ -332,7 +334,7 @@ footer b{color:#9aa7ff;font-weight:500}
 <div id="navDrawer"><header>对话导航</header><div id="navList"></div></div>
 <footer>可继续对话 · 不能新建/切换/管理工作区 · <b>请在电脑端操作</b></footer>
 <script>
-var state={sessionId:null,title:'',seenSeq:{},minSeq:Infinity,pollTimer:null,sending:false,loadingMore:false};
+var state={sessionId:null,title:'',seenSeq:{},minSeq:Infinity,pollTimer:null,sending:false,loadingMore:false,hasMore:true};
 var $=function(s){return document.querySelector(s)};
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function fmt(ts){var d=new Date(ts);return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
@@ -365,7 +367,7 @@ function renderList(){
 }
 /* 聊天 */
 function openChat(id,title){
-  state.sessionId=id;state.title=title;state.seenSeq={};state.minSeq=Infinity;
+  state.sessionId=id;state.title=title;state.seenSeq={};state.minSeq=Infinity;state.hasMore=true;
   $('#list').style.display='none';
   $('#chatView').style.display='flex';
   $('#chatTitle').textContent=title;
@@ -395,21 +397,30 @@ function loadMessages(){
     return api('session/page',{request:{address:{kind:'session',sessionId:state.sessionId},throughSeq:seq,maxMessages:300}});
   }).then(function(res){
     if(!res||res.ok===false)return;
+    state.hasMore = !!(res.value&&res.value.hasMore); // 是否还有更早未加载
     renderRecords(res.value.records,false);
   }).catch(function(){});
 }
-function loadEarlier(){
-  if(!state.sessionId||state.loadingMore||state.minSeq===Infinity)return;
+function loadEarlier(cb){
+  if(!state.sessionId||state.loadingMore||state.minSeq===Infinity){if(cb)cb();return;}
   state.loadingMore=true;
   var bar=$('#moreBar');
+  var done=function(){state.loadingMore=false;if(cb)cb();};
   getAsOfSeq().then(function(seq){
     var through=Math.min(seq,state.minSeq-1);
-    if(through<1){state.loadingMore=false;if(bar)bar.textContent='已到最早';return null}
+    if(through<1){state.hasMore=false;if(bar)bar.textContent='已到最早';return null}
     return api('session/page',{request:{address:{kind:'session',sessionId:state.sessionId},throughSeq:through,maxMessages:200}});
   }).then(function(res){
-    if(res&&res.ok){renderRecords(res.value.records,true);if(bar)bar.textContent=''}else if(bar){bar.textContent='已到最早'}
-    state.loadingMore=false;
-  }).catch(function(){state.loadingMore=false});
+    if(res&&res.ok){
+      renderRecords(res.value.records,true);
+      state.hasMore = !!(res.value&&res.value.hasMore);
+      if(bar)bar.textContent='';
+    }else{
+      state.hasMore=false;
+      if(bar)bar.textContent='已到最早';
+    }
+    done();
+  }).catch(function(){state.hasMore=false;done();});
 }
 function renderRecords(records,prepend){
   var box=$('#messages');var rows=[];
@@ -463,16 +474,22 @@ function sendMsg(){
     else{$('#input').value='';loadMessages()}
   }).catch(function(){alert('发送失败，请重试')}).then(function(){state.sending=false;$('#sendBtn').disabled=false});
 }
-/* 对话导航（右侧抽屉） */
+/* 对话导航（右侧抽屉）：
+   大纲基于“已加载”的消息（聊天分页加载，更早消息需先加载），
+   顶部提供“加载更早对话”入口逐页补全，避免长会话大纲缺失 */
 function openNav(){
   var nav=[];
   document.querySelectorAll('.msg.user').forEach(function(el){
     nav.push({seq:el.getAttribute('data-seq'),text:el.textContent.slice(0,24),time:el.getAttribute('data-time')});
   });
   var list=$('#navList');
-  if(!nav.length){list.innerHTML='<div class="navEmpty">暂无对话节点</div>'}
-  else{
-    var h='';
+  var h='';
+  if(state.hasMore){
+    h+='<div class="navMore" id="navMore">↑ 加载更早对话（已显示 '+nav.length+' 个节点）</div>';
+  }
+  if(!nav.length&&!state.hasMore){
+    list.innerHTML='<div class="navEmpty">暂无对话节点</div>';
+  }else{
     nav.slice().reverse().forEach(function(n){h+='<div class="navItem" data-seq="'+n.seq+'"><span class="t">'+esc(n.text||'…')+'</span><span class="tm">'+fmt(Number(n.time)||Date.now())+'</span></div>'});
     list.innerHTML=h;
   }
@@ -495,12 +512,19 @@ $('#input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftK
 $('#navBtn').addEventListener('click',openNav);
 $('#navMask').addEventListener('click',closeNav);
 $('#navList').addEventListener('click',function(e){
+  var more=e.target.closest('#navMore');
+  if(more){
+    // 加载更早一页后重建大纲（抽屉保持打开，可连续点击直到加载到最早）
+    loadEarlier(function(){ openNav(); });
+    return;
+  }
   var item=e.target.closest('.navItem');
   if(!item)return;
   var seq=item.getAttribute('data-seq');
   closeNav();
   var el=document.getElementById('msg-'+seq);
-  if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+  if(el){el.scrollIntoView({behavior:'smooth',block:'center'});}
+  else{alert('该消息尚未加载，请先点“加载更早对话”');}
 });
 $('#messages').addEventListener('scroll',function(){
   if(this.scrollTop<40)loadEarlier();
