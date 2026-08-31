@@ -317,6 +317,7 @@ footer b{color:#9aa7ff;font-weight:500}
 .navEmpty{text-align:center;color:var(--sub);padding:40px 16px;font-size:13px}
 .navMore{padding:12px;margin:4px 10px 10px;border-radius:10px;background:rgba(77,107,254,.14);color:#9aa7ff;font-size:13.5px;text-align:center;cursor:pointer;flex:none}
 .navMore:active{background:rgba(77,107,254,.24)}
+.navCount{font-size:11.5px;color:var(--sub);text-align:center;padding:6px 0 8px;flex:none}
 </style>
 </head>
 <body>
@@ -334,7 +335,8 @@ footer b{color:#9aa7ff;font-weight:500}
 <div id="navDrawer"><header>对话导航</header><div id="navList"></div></div>
 <footer>可继续对话 · 不能新建/切换/管理工作区 · <b>请在电脑端操作</b></footer>
 <script>
-var state={sessionId:null,title:'',seenSeq:{},minSeq:Infinity,pollTimer:null,sending:false,loadingMore:false,hasMore:true};
+var state={sessionId:null,title:'',seenSeq:{},minSeq:Infinity,pollTimer:null,sending:false,loadingMore:false,hasMore:true,
+  navNodes:null,navPage:60,navHasMore:false,navLoading:false,navCursor:-1};
 var $=function(s){return document.querySelector(s)};
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function fmt(ts){var d=new Date(ts);return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
@@ -368,6 +370,7 @@ function renderList(){
 /* 聊天 */
 function openChat(id,title){
   state.sessionId=id;state.title=title;state.seenSeq={};state.minSeq=Infinity;state.hasMore=true;
+  state.navNodes=null;state.navPage=60;state.navHasMore=false;state.navLoading=false;state.navCursor=-1;
   $('#list').style.display='none';
   $('#chatView').style.display='flex';
   $('#chatTitle').textContent=title;
@@ -474,31 +477,130 @@ function sendMsg(){
     else{$('#input').value='';loadMessages()}
   }).catch(function(){alert('发送失败，请重试')}).then(function(){state.sending=false;$('#sendBtn').disabled=false});
 }
-/* 对话导航（右侧抽屉）：
-   大纲基于“已加载”的消息（聊天分页加载，更早消息需先加载），
-   顶部提供“加载更早对话”入口逐页补全，避免长会话大纲缺失 */
-function openNav(){
-  var nav=[];
-  document.querySelectorAll('.msg.user').forEach(function(el){
-    nav.push({seq:el.getAttribute('data-seq'),text:el.textContent.slice(0,24),time:el.getAttribute('data-time')});
+/* 对话导航（右侧抽屉）——独立于聊天加载的分页大纲：
+   节点数据从会话历史（session/page）直接提取全部用户消息（source.kind==='user'），
+   不依赖聊天 DOM 的加载状态；列表分页浏览（每页 60 个，可继续加载更早）；
+   跳转时若目标消息未加载，自动分页加载聊天直到定位到该消息。 */
+function initNav(){
+  // 合并 DOM 中已渲染的节点与历史收集的节点，按 seq 去重、降序（最新在前）
+  var els=document.querySelectorAll('.msg.user');
+  var seen={},merged=[];
+  for(var i=els.length-1;i>=0;i--){
+    var el=els[i];
+    var seq=Number(el.getAttribute('data-seq'))||0;
+    if(seen[seq])continue;seen[seq]=1;
+    merged.push({seq:seq,text:el.textContent.slice(0,24),time:el.getAttribute('data-time')});
+  }
+  (state.navNodes||[]).forEach(function(n){
+    if(seen[n.seq])return;seen[n.seq]=1;
+    merged.push(n);
   });
-  var list=$('#navList');
-  var h='';
-  if(state.hasMore){
-    h+='<div class="navMore" id="navMore">↑ 加载更早对话（已显示 '+nav.length+' 个节点）</div>';
-  }
-  if(!nav.length&&!state.hasMore){
-    list.innerHTML='<div class="navEmpty">暂无对话节点</div>';
+  merged.sort(function(a,b){return b.seq-a.seq});
+  state.navNodes=merged;
+}
+// 从会话历史向前取一页事件，提取其中的用户消息节点（追加到 navNodes 末尾即更旧部分）
+function fetchNavNodes(cb){
+  var doFetch=function(through){
+    api('session/page',{request:{address:{kind:'session',sessionId:state.sessionId},throughSeq:through,maxMessages:200}}).then(function(res){
+      if(!res||res.ok===false){cb([]);return;}
+      var records=(res.value&&res.value.records)||[];
+      var nodes=[],minSeq=state.navCursor;
+      records.forEach(function(r){
+        if(r.type!=='event'||!r.event)return;
+        var ev=r.event;
+        if(typeof ev.seq==='number'&&(minSeq<0||ev.seq<minSeq))minSeq=ev.seq;
+        if(ev.type!=='user/message')return;
+        var d=ev.data||{};
+        var sk=d.source&&d.source.kind;
+        if(sk&&sk!=='user')return; // 只取真实用户输入（与聊天渲染一致）
+        var t=extractText(d.content);
+        if(t)nodes.push({seq:ev.seq,text:t,time:ev.time});
+      });
+      state.navCursor=minSeq;
+      state.navHasMore=!!(res.value&&res.value.hasMore);
+      cb(nodes);
+    }).catch(function(){cb([]);});
+  };
+  if(state.navCursor<0){
+    // 首次：从最新开始
+    getAsOfSeq().then(function(seq){doFetch(seq)}).catch(function(){cb([]);});
   }else{
-    nav.slice().reverse().forEach(function(n){h+='<div class="navItem" data-seq="'+n.seq+'"><span class="t">'+esc(n.text||'…')+'</span><span class="tm">'+fmt(Number(n.time)||Date.now())+'</span></div>'});
-    list.innerHTML=h;
+    doFetch(state.navCursor-1);
   }
+}
+function renderNav(){
+  var list=$('#navList');
+  var all=state.navNodes||[];
+  var show=all.slice(0,state.navPage);
+  var h='';
+  if(all.length>0||state.navHasMore){
+    h+='<div class="navCount">对话节点 '+all.length+' 个'+(state.navHasMore?' · 还有更早可加载':'')+'</div>';
+  }
+  if(show.length===0){
+    if(state.navLoading){h+='<div class="navEmpty">正在加载节点…</div>';}
+    else if(state.navHasMore){h+='<div class="navEmpty">正在定位更早的对话…</div>';}
+    else{h+='<div class="navEmpty">暂无对话节点</div>';}
+  }else{
+    show.forEach(function(n){
+      h+='<div class="navItem" data-seq="'+n.seq+'"><span class="t">'+esc(n.text||'…')+'</span><span class="tm">'+fmt(Number(n.time)||Date.now())+'</span></div>';
+    });
+  }
+  if(state.navPage<all.length||state.navHasMore){
+    var label=state.navLoading?'正在加载…':
+      (state.navPage<all.length?('↓ 加载更多节点（已显示 '+show.length+' / '+all.length+'）'):'↓ 加载更早对话');
+    h+='<div class="navMore" id="navMore">'+label+'</div>';
+  }
+  list.innerHTML=h;
+}
+function loadMoreNav(){
+  if(state.navLoading)return;
+  state.navLoading=true;
+  renderNav();
+  var finish=function(){state.navLoading=false;renderNav();};
+  // 1) 已收集节点尚未显示完 → 直接展开下一页
+  if(state.navPage<state.navNodes.length){state.navPage+=60;finish();return;}
+  // 2) 已收集节点显示完 → 向前遍历历史（每次最多 3 页事件，控制请求量）
+  var pages=3,got=0,more=[];
+  var step=function(){
+    if(got>=pages){if(more.length)state.navNodes=state.navNodes.concat(more);state.navPage+=60;finish();return;}
+    fetchNavNodes(function(nodes){
+      got++;
+      more=more.concat(nodes);
+      if(state.navHasMore&&got<pages)step();
+      else{if(more.length)state.navNodes=state.navNodes.concat(more);state.navPage+=60;finish();}
+    });
+  };
+  step();
+}
+function openNav(){
+  initNav();
+  renderNav();
   $('#navDrawer').style.display='flex';$('#navMask').style.display='block';
   setTimeout(function(){$('#navDrawer').classList.add('open')},10);
 }
 function closeNav(){
   $('#navDrawer').classList.remove('open');
   setTimeout(function(){if(!$('#navDrawer').classList.contains('open')){$('#navDrawer').style.display='none';$('#navMask').style.display='none'}},200);
+}
+// 跳转到目标消息：若未加载，分页向前加载聊天直到目标进入 DOM（最多 40 页）
+function locateMsg(targetSeq){
+  var guard=0;
+  var tryScroll=function(){
+    var el=document.getElementById('msg-'+targetSeq);
+    if(el){$('#chatView').style.display='flex';el.scrollIntoView({behavior:'smooth',block:'center'});return true;}
+    return false;
+  };
+  if(tryScroll())return;
+  var step=function(){
+    if(++guard>40){alert('未能定位到该消息（可能已到最早）');return;}
+    if(tryScroll())return;
+    if(!state.hasMore){alert('该消息尚未加载且已到最早');return;}
+    loadEarlier(function(){
+      if(tryScroll())return;
+      step();
+    });
+  };
+  step();
 }
 $('#list').addEventListener('click',function(e){
   var head=e.target.closest('.groupHead');
@@ -513,18 +615,12 @@ $('#navBtn').addEventListener('click',openNav);
 $('#navMask').addEventListener('click',closeNav);
 $('#navList').addEventListener('click',function(e){
   var more=e.target.closest('#navMore');
-  if(more){
-    // 加载更早一页后重建大纲（抽屉保持打开，可连续点击直到加载到最早）
-    loadEarlier(function(){ openNav(); });
-    return;
-  }
+  if(more){loadMoreNav();return;}
   var item=e.target.closest('.navItem');
   if(!item)return;
   var seq=item.getAttribute('data-seq');
   closeNav();
-  var el=document.getElementById('msg-'+seq);
-  if(el){el.scrollIntoView({behavior:'smooth',block:'center'});}
-  else{alert('该消息尚未加载，请先点“加载更早对话”');}
+  locateMsg(Number(seq));
 });
 $('#messages').addEventListener('scroll',function(){
   if(this.scrollTop<40)loadEarlier();
