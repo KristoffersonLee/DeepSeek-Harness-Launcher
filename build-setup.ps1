@@ -33,6 +33,8 @@ Write-Host "编译 DSHLauncherSetup.exe ..."
     "/resource:$here\lib\Microsoft.Web.WebView2.WinForms.dll,Microsoft.Web.WebView2.WinForms.dll" `
     "/resource:$here\lib\WebView2Loader.dll,WebView2Loader.dll" `
     "/resource:$here\README.md,README.md" `
+    "/resource:$here\docs\MAINTENANCE.zh.md,MAINTENANCE.zh.md" `
+    "/resource:$here\docs\MAINTENANCE.en.md,MAINTENANCE.en.md" `
     /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
     "$here\DSHLauncherSetup.cs"
 

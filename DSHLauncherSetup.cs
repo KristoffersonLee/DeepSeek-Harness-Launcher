@@ -3,7 +3,8 @@
 //       → 完成页(启动应用/创建桌面图标/新手指引)
 // 命令行: --silent-install [目录]  静默安装(写 setup.log, 退出码 0/1)
 //         --detect-only            只检测环境(写 setup.detect.log)
-// 构建: build-setup.ps1（内嵌 DSHLauncher.exe、app.ico、WebView2 三个运行库与 README.md，单文件分发）
+// 构建: build-setup.ps1（内嵌 DSHLauncher.exe、app.ico、WebView2 三个运行库、
+//       README.md 与维护手册 MAINTENANCE.zh.md / MAINTENANCE.en.md，单文件分发）
 // 作者: KristoffersonLee
 // 兼容 C# 5（系统自带 csc v4.0.30319；注意 StandardOutputEncoding 需 .NET 4.5+ 运行时，
 //        Win10/11 自带 4.8，兼容 4.0 目标即可）。
@@ -603,8 +604,10 @@ namespace DSHSetup
                 ExtractResource("Microsoft.Web.WebView2.WinForms.dll",
                     Path.Combine(dir, "Microsoft.Web.WebView2.WinForms.dll"));
                 ExtractResource("WebView2Loader.dll", Path.Combine(dir, "WebView2Loader.dll"));
-                // 随安装部署唯一文档 README.md（含升级与维护手册）
+                // 随安装部署文档：README.md（简介）+ 升级与维护手册（中英双语）
                 ExtractResource("README.md", Path.Combine(dir, "README.md"));
+                ExtractResource("MAINTENANCE.zh.md", Path.Combine(dir, "MAINTENANCE.zh.md"));
+                ExtractResource("MAINTENANCE.en.md", Path.Combine(dir, "MAINTENANCE.en.md"));
                 WriteUninstallCmd(dir);
                 RegisterUninstall(dir);
                 if (createShortcut) CreateShortcut(dir);
@@ -958,7 +961,7 @@ namespace DSHSetup
             lblNote.Text =
                 "· 安装为当前用户，无需管理员权限；\n" +
                 "· 已安装过时选择同一目录即为升级，设置文件会自动保留；\n" +
-                "· 安装内容：DSHLauncher.exe、WebView2 运行库、app.ico、README.md（升级与维护手册）、uninstall.cmd；\n" +
+                "· 安装内容：DSHLauncher.exe、WebView2 运行库、app.ico、README.md、维护手册（中英双语）、uninstall.cmd；\n" +
                 "· 桌面图标与启动选项在最后一步选择。";
 
             pages[2].Controls.Add(lblDir);
@@ -1021,7 +1024,7 @@ namespace DSHSetup
             tip.Text =
                 "之后想再次打开：双击桌面图标即可。\n" +
                 "想卸载：运行安装目录里的 uninstall.cmd，或通过“设置→应用”卸载。\n" +
-                "升级与维护：参见安装目录里的 README.md（升级与维护手册）。";
+                "升级与维护：参见安装目录里的 README.md 与维护手册（MAINTENANCE.zh.md / MAINTENANCE.en.md）。";
 
             pages[4].Controls.Add(lblDone);
             pages[4].Controls.Add(chkLaunch);
