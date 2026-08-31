@@ -228,7 +228,7 @@ README.md / LICENSE                    本文件（含升级与维护手册）�
 5. [常见故障与修复](#15-常见故障与修复)
 6. [启动器行为说明](#16-启动器行为说明)
 7. [维护规范与防坑规则](#17-维护规范与防坑规则)
-8. [附录 A：发布者本机环境快照（2026-08-31）](#18-附录-a发布者本机环境快照2026-08-31)
+8. [附录 A：发布者本机环境快照（2026-09-01）](#18-附录-a发布者本机环境快照2026-09-01)
 9. [附录 B：版本跟踪与破坏性变更速查](#19-附录-b版本跟踪与破坏性变更速查)
 10. [附录 C：发布者本机升级历史](#110-附录-c发布者本机升级历史)
 
@@ -406,7 +406,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 6. **版本显式化**：安装/升级必须写显式版本号，避免标签漂移。
 7. **凭据安全**：API Key 存放于 `%USERPROFILE%\.dsh\.credentials.yaml`，**不要提交到仓库或写入文档**；升级 dsh 不改变凭据。
 
-### 1.8 附录 A：发布者本机环境快照（2026-08-31）
+### 1.8 附录 A：发布者本机环境快照（2026-09-01）
 
 > 以下为发布者机器（Windows，用户目录 `C:\Users\20183`）的记录，**供对照参考，非通用要求**。
 
@@ -417,7 +417,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | Node.js | v26.7.0 | `C:\Program Files\nodejs` |
 | npm | 12.0.2 | 全局前缀 `C:\Users\20183\AppData\Roaming\npm` |
 | pnpm | 11.22.0 | 同上 |
-| @deepseek-ai/dsh | **0.1.2-alpha.2**（npm `alpha` 标签；latest/next = 0.1.1-rc.2） | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
+| @deepseek-ai/dsh | **0.1.2-alpha.3**（npm `alpha` 标签；latest/next = 0.1.1-rc.2） | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
 | Git | 2.55.0.4 | WinGet MinGit |
 | Python | 3.13.15 | `C:\Users\20183\Local\Programs\Python\Python313` |
 | DSHLauncher | v3.0.0（局域网共享 + 全新手机端 UI + 只读模式 + 归档清理） | `D:\DSHLauncher` |
@@ -433,7 +433,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 默认模型 | `deepseek-v4-flash`（reasoningEffort: high） |
 | 默认输出上限 | DSH 默认 `256K`（官方支持最大 384K） |
 
-导入模型目录（0.1.2-alpha.2 复核与 0.1.1-rc.2 一致）：
+导入模型目录（0.1.2-alpha.3 复核：与 0.1.2-alpha.2 一致，发布说明无模型变更条目）：
 
 | 模型 id | 上下文 | 输出上限 | 输入模态 |
 |---|---|---|---|
@@ -457,6 +457,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 0.1.1-rc.2 | latest/next | JSONL 会话后端默认压缩改 `zstd`（注意混编码崩溃，故障 C）；内置 DeepSeek 模型目录（flash/pro/vision-exp） |
 | 0.1.2-alpha.1 | （GitHub，未上架 npm） | **APIProxy 移除 → @Remote 网关**；pi-ai 模型支持更新 + vLLM 思考预算；统一 `dsh` Profile 启动；WebFetch 默认开启（SSRF 防护） |
 | 0.1.2-alpha.2 | alpha（npm） | 含 alpha.1 全部变更；**Web 界面强制一次性 token 认证**（故障 D，启动器已适配）；恢复 `SessionEvent.ignorable`；RemoteError 统一封装；Node 24 启动修复 |
+| 0.1.2-alpha.3 | alpha（npm） | 长会话右侧导航/渲染内存优化、图片回显与投递修复、连接误判修复、窄视口定时计划修复；移除**可选** SQLite 持久化后端（zstd JSONL 不受影响）；**无事件结构 / API / token 认证契约变更**（手机端 UI 与局域网网关无需适配） |
 | 启动器 v3.0.0 | — | 局域网共享与全新手机端专属 UI（非 dsh 原生）：会话分组折叠、聊天（历史/加载更早/大纲导航）、只读模式（前端隐藏 + 网关 API 拦截）、会话过滤（归档/子代理/空白）、归档会话一键彻底清理、PIN 轮换踢出所有设备、SW 随机化自动刷缓存 |
 
 > 核对命令：`npm view @deepseek-ai/dsh dist-tags`；发布说明见 `https://github.com/deepseek-ai/deepseek-harness/releases`。
@@ -474,6 +475,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 2026-08-31 | dsh 0.1.1-rc.2 → **0.1.2-alpha.2**（npm alpha 标签）；token 认证破坏性变更 → 启动器适配（故障 D） | ✅ |
 | 2026-08-31（补） | 启动器行为修复：退出默认保留 dsh web（网页不中断）；自动接管依赖 30 天 cookie | ✅ |
 | 2026-08-31（补2） | 版本升至 v2.0.0；手册并入 README（单文档随发布）；安装包部署 README、卸载脚本通用化 | ✅ |
+| 2026-09-01 | dsh 0.1.2-alpha.2 → **0.1.2-alpha.3**（npm alpha 标签）；核验：koffi 3.1.6 / node-pty 可加载 / 插件树 539 行无 error；确认事件结构、`dsh-auth-` cookie、token 契约无变更 → **手机端 UI 无需升级**；API 引用复核与附录 A 一致 | ✅ |
 
 ---
 
@@ -600,7 +602,7 @@ README.md / LICENSE                    this file (includes the upgrade & mainten
 5. [Common Failures & Fixes](#15-common-failures--fixes)
 6. [Launcher Behavior](#16-launcher-behavior)
 7. [Maintenance Rules & Pitfalls](#17-maintenance-rules--pitfalls)
-8. [Appendix A: Publisher Machine Snapshot (2026-08-31)](#18-appendix-a-publisher-machine-snapshot-2026-08-31)
+8. [Appendix A: Publisher Machine Snapshot (2026-09-01)](#18-appendix-a-publisher-machine-snapshot-2026-09-01)
 9. [Appendix B: Version Tracking & Breaking Changes](#19-appendix-b-version-tracking--breaking-changes)
 10. [Appendix C: Publisher Upgrade History](#110-appendix-c-publisher-upgrade-history)
 
@@ -777,7 +779,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 6. **Pin explicit versions** to avoid tag drift.
 7. **Credential safety**: API keys live in `%USERPROFILE%\.dsh\.credentials.yaml` — **never commit them to the repo or write them into documents**; upgrading dsh does not change credentials.
 
-### 1.8 Appendix A: Publisher Machine Snapshot (2026-08-31)
+### 1.8 Appendix A: Publisher Machine Snapshot (2026-09-01)
 
 > The following records the publisher machine (Windows, user dir `C:\Users\20183`) — **reference only, not generic requirements**.
 
@@ -788,7 +790,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | Node.js | v26.7.0 | `C:\Program Files\nodejs` |
 | npm | 12.0.2 | prefix `C:\Users\20183\AppData\Roaming\npm` |
 | pnpm | 11.22.0 | same |
-| @deepseek-ai/dsh | **0.1.2-alpha.2** (npm `alpha` tag; latest/next = 0.1.1-rc.2) | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
+| @deepseek-ai/dsh | **0.1.2-alpha.3** (npm `alpha` tag; latest/next = 0.1.1-rc.2) | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
 | Git | 2.55.0.4 | WinGet MinGit |
 | Python | 3.13.15 | `C:\Users\20183\Local\Programs\Python\Python313` |
 | DSHLauncher | v3.0.0 (LAN sharing + standalone mobile UI + read-only mode + archive purge) | `D:\DSHLauncher` |
@@ -804,7 +806,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | Default model | `deepseek-v4-flash` (reasoningEffort: high) |
 | Default output cap | dsh default `256K` (official max 384K) |
 
-Imported model catalog (re-verified on 0.1.2-alpha.2, identical to 0.1.1-rc.2):
+Imported model catalog (re-verified on 0.1.2-alpha.3, identical to 0.1.2-alpha.2):
 
 | Model id | Context | Output cap | Input modalities |
 |---|---|---|---|
@@ -828,6 +830,7 @@ Credential / API key references (secrets live in `C:\Users\20183\.dsh\.credentia
 | 0.1.1-rc.2 | latest/next | JSONL session backend default compression changed to `zstd` (watch mixed-encoding crashes, Failure C); built-in DeepSeek model catalog (flash/pro/vision-exp) |
 | 0.1.2-alpha.1 | (GitHub only, not on npm) | **APIProxy removed → @Remote gateway**; pi-ai model support updates + vLLM thinking budget; unified `dsh` Profile startup; WebFetch enabled by default (SSRF protection) |
 | 0.1.2-alpha.2 | alpha (npm) | all alpha.1 changes; **one-time token auth on the Web UI** (Failure D, launcher adapted); restored `SessionEvent.ignorable`; unified RemoteError; Node 24 startup fix |
+| 0.1.2-alpha.3 | alpha (npm) | long-conversation right-nav & rendering memory improvements, image echo/delivery fixes, connection-misdetection fix, narrow-viewport schedule fix; removed the **optional** SQLite persistence backend (zstd JSONL unaffected); **no event-structure / API / token-auth contract changes** (mobile UI and LAN gateway need no adaptation) |
 
 > Check with `npm view @deepseek-ai/dsh dist-tags`; release notes at `https://github.com/deepseek-ai/deepseek-harness/releases`.
 
@@ -843,5 +846,7 @@ Credential / API key references (secrets live in `C:\Users\20183\.dsh\.credentia
 | 2026-08-30 (p2) | workflow change: removed one-click upgrade script; "one sentence triggers agent per manual"; cleaned root | ✅ |
 | 2026-08-31 | dsh 0.1.1-rc.2 → **0.1.2-alpha.2** (npm alpha tag); token-auth breaking change → launcher adaptation (Failure D) | ✅ |
 | 2026-08-31 (fix) | launcher behavior fix: exit keeps dsh web running (web stays connected); adoption relies on 30-day cookie | ✅ |
+| 2026-08-31 (p2) | version bumped to v2.0.0; manual merged into README (single doc ships with release); installer deploys README; uninstall script generalized | ✅ |
+| 2026-09-01 | dsh 0.1.2-alpha.2 → **0.1.2-alpha.3** (npm alpha tag); verified: koffi 3.1.6 / node-pty loadable / 539-line plugin tree, no error; confirmed event structure, `dsh-auth-` cookie and token contracts unchanged → **mobile UI upgrade NOT needed**; API references re-verified identical to Appendix A | ✅ |
 | 2026-08-31 (p2) | version bumped to v2.0.0; manual merged into README (single document shipped); installer ships README; portable uninstaller | ✅ |
 | 2026-09-01 | v2.0.0 → **v3.0.0**：局域网共享 + 全新手机端专属 UI（会话分组/聊天/只读模式/会话过滤/归档清理）；版本号一致性检查并更新 README | ✅ |
