@@ -1,5 +1,14 @@
 # Changelog / 更新日志
 
+## v4.0.0 (2026-09-05)
+
+### 🔧 修复与优化 / Fixes & Improvements
+
+- **全面审阅修复**：probeReady 竞态条件（代际号）、UpgradeDsh 管道死锁（异步排空）、升级回调进程崩溃守卫（IsDisposed）、cache-bust 硬编码 IP、WebView2 检测优化（单层扫描）、下载退避重试、Node 多版本选择一致性、卸载脚本增强（防火墙规则 + %APPDATA% 清理）
+  - Full audit fixes: probeReady race (generation counter), UpgradeDsh pipe deadlock (async drain), upgrade callback crash guard (IsDisposed), cache-bust hardcoded IP, WebView2 detection optimization (single-level scan), download backoff retry, Node multi-version selection consistency, uninstaller enhancement (firewall + %APPDATA% cleanup)
+- **一致性修正**：版本号统一为 v4.0.0；卸载行为与 README 一致（保留 settings.ini）；安装包/卸载器同步
+  - Consistency: version unified to v4.0.0; uninstall behavior matches README (preserves settings.ini); installer/uninstaller sync
+
 ## v3.0.0 (2026-09-01)
 
 ### 🆕 新功能 / New Features
@@ -21,8 +30,8 @@
   - Mobile fixes: subagent-injected messages no longer masquerade as user messages; paginated standalone outline (load to earliest, auto-locate on jump); chronological outline order; full two-line group/session titles
 - **运行日志 UTF-8 修复**：中文不再乱码（dsh web 与网关进程显式 UTF-8 解码）
   - UTF-8 process-output fix: no more garbled Chinese in the log (explicit UTF-8 decoding for dsh web & gateway)
-- **dsh 升级至 0.1.2-alpha.3**：事件/API/token 契约无变更，手机 UI 与网关零适配
-  - dsh upgraded to 0.1.2-alpha.3: no event/API/token contract changes — mobile UI and gateway need no adaptation
+- **dsh 升级至 0.1.2-rc.1**：Session persistence API 内部变更（SessionHandle + session lock）不影响外部 JSON-RPC 契约，手机 UI 与网关零适配
+  - dsh upgraded to 0.1.2-rc.1: Session persistence API internal change (SessionHandle + session lock) does not affect external JSON-RPC contract — mobile UI and gateway need no adaptation
 - **最终审查修复**：401 重试不再丢失响应、改 PIN 后网关强制重启（旧 PIN/Cookie 立即失效）、大纲"加载更早"可达且节点去重、SSE 长静默不再被超时掐断、速率限制数值校验、日志脱敏全覆盖等 18 项
   - Final audit fixes: 401 retry no longer loses the response, gateway hard-restart on PIN change (old PIN/cookies invalidated immediately), outline load-earlier reachable with dedup, SSE no longer cut by idle timeout, rate-limit value validation, full log redaction coverage, and more (18 items)
 - **文档重构**：README 精简为双语主文档，升级维护手册拆分至 docs/MAINTENANCE.zh.md / MAINTENANCE.en.md

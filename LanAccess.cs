@@ -2,7 +2,8 @@
 // 职责: 局域网 IP 探测 / PIN 解析(.env 与环境变量，禁止硬编码) / Windows 防火墙规则
 //       / 内嵌 lan-gateway.mjs 资源释放 / Ollama 检测
 // 兼容 C# 5（系统自带 csc v4.0.30319），勿使用字符串插值 / ?. / out var 等新语法。
-// 依赖: System.dll / System.Core.dll / System.Net.NetworkInformation（System.Drawing 仅用于 Application.ExecutablePath）
+// 依赖: System.dll / System.Core.dll / System.Windows.Forms（Application.ExecutablePath）
+//       / System.Net.NetworkInformation
 
 using System;
 using System.Collections.Generic;
@@ -341,9 +342,9 @@ namespace DSHLauncher
         /// <summary>生成并持久化一个新的 6 位数字 PIN（加密安全随机，避免 Random() 时间种子可预测）。</summary>
         public static string GeneratePin()
         {
-            StringBuilder sb = new StringBuilder();
-            using (System.Security.Cryptography.RNGCryptoServiceProvider rng =
-                new System.Security.Cryptography.RNGCryptoServiceProvider())
+            StringBuilder sb = new StringBuilder(6);
+            using (System.Security.Cryptography.RandomNumberGenerator rng =
+                System.Security.Cryptography.RandomNumberGenerator.Create())
             {
                 byte[] buf = new byte[1];
                 for (int i = 0; i < 6; i++)

@@ -82,10 +82,54 @@ npm install -g "@deepseek-ai/dsh@<dsh-version>" --no-audit --no-fund --prefer-on
 `"C:\Program Files\nodejs\npm.cmd" install -g "@deepseek-ai/dsh@<版本>" --prefix "<npm-prefix>" --no-audit --no-fund --prefer-online --allow-scripts=...`。
 若默认 npm-cache 报 EPERM，追加 `--cache <可写目录>`。
 
-**安装纪律**
+**安装前准备（必须）**
 
+- **必须先停止 dsh web 服务**，否则运行中的进程会锁定文件（如 `koffi.node`），导致安装失败（EBUSY）或产生半成品目录：
+  ```powershell
+  # 查找运行中的 dsh 进程
+  Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' }
+  # 停止（如果有）
+  Stop-Process -Id <PID> -Force
+  ```
 - 让安装**完整跑完**（约 3–5 分钟），**不要中途 kill、不要同时杀进程**（曾因中断导致残留 worker 死锁与半成品目录）。
 - 升级只改磁盘文件，运行中的 dsh web 不受影响；**升级后需重启启动器**才加载新版本。
+
+**⚠️ 特殊情况：通过 DSH 内的 AI Agent 远程升级时**
+
+当用户通过 DSH Web 界面与 AI Agent（如本 Agent）对话，要求 Agent 执行 dsh 升级时，会出现一个矛盾：
+- Agent 运行在 dsh 进程内部
+- 按手册要求，升级前必须先停止 dsh 进程
+- 停止 dsh = 中断 Agent 自身的对话通道
+
+**解决方法：**
+1. Agent **不应自行执行** `Stop-Process` 停止 dsh，而应输出完整的升级命令供用户在外部终端手动执行。
+2. 用户在 PowerShell / cmd 中运行停止 → 安装 → 验证 → 重启流程。
+3. 升级完成后，Agent 可通过新版本的 dsh 继续对话。
+
+示例输出模板：
+```
+由于我运行在 DSH 内部，无法停止自身进程。请在终端中手动执行：
+
+# 1. 停止 dsh
+Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' } | Stop-Process -Force
+
+# 2. 安装新版本
+npm install -g "@deepseek-ai/dsh@<版本>" --no-audit --no-fund --prefer-online --allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs
+
+# 3. 验证
+dsh --version
+
+# 4. 重启 dsh
+dsh web
+```
+
+**安装后清理**
+
+- 安装失败后可能在 `%TEMP%` 残留 `dsh-broken-*`、`dsh-partial-*`、`dsh-spill-*`、`dsh-subprocess-*` 等目录（每个可达数百 MB），应手动清理：
+  ```powershell
+  Get-ChildItem "$env:TEMP" -Directory | Where-Object { $_.Name -like 'dsh-*' } | Remove-Item -Recurse -Force
+  ```
+- 安装失败后在 npm 缓存中可能残留损坏的 tarball，下次安装应加 `--prefer-online` 绕过缓存。
 
 ### 1.4 升级后验证清单
 
@@ -161,6 +205,22 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
    被运行中进程锁定的残留，**重启启动器后即可删**。
 3. 删除损坏安装（`Remove-Item "<npm-prefix>\node_modules\@deepseek-ai\dsh" -Recurse -Force`）后按第 1.3 节完整重装，按第 1.4 节核验，再重启启动器。
 
+**故障 EBUSY：安装失败（文件被锁定）**
+
+- **现象**：`npm install -g @deepseek-ai/dsh@<版本>` 报 `EBUSY: resource busy or locked` 或 `EEXIST: file already exists`，安装中断。
+- **根因**：运行中的 dsh web 进程锁定了 `koffi.node` 等文件，npm 无法覆盖。
+- **修复**：
+  1. **先停止 dsh 进程**：
+     ```powershell
+     Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' } | Stop-Process -Force
+     ```
+  2. 清理残留目录（`%TEMP%\dsh-broken-*`、`dsh-partial-*`、`dsh-spill-*`、`dsh-subprocess-*`）。
+  3. 重新安装（加 `--prefer-online` 绕过缓存）：
+     ```powershell
+     npm install -g "@deepseek-ai/dsh@<版本>" --no-audit --no-fund --prefer-online --allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs
+     ```
+  4. 按第 1.4 节验证清单核验。
+
 **故障 F：常见误报（不是问题）**
 
 | 现象 | 说明 |
@@ -185,12 +245,14 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 ### 1.7 维护规范与防坑规则
 
 1. **全局 npm 前缀必须与启动器使用的前缀一致**。执行前 `npm config get prefix` 确认；多 Node 环境（如其它工具的受管 Node）下 `npm` 可能指向不同前缀导致装错位置——用系统 npm + 显式 `--prefix` 最稳。
-2. **npm 12 的 allow-scripts 策略会静默破坏原生模块**（故障 B 根因）：升级 dsh 必须带 `--allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs`，装完立即核验 koffi 版本。
-3. **升级/重装后必须核验完整性**（第 1.4 节清单），尤其是 koffi 原生版本与 `dump-config`。
-4. **不要一边装一边杀进程**；让安装完整跑完，确需中断时先确认残留进程。
-5. **升级前评估破坏性变更**：阅读目标版本发布说明（速查见附录 B）；协议/配置变更（如 token 认证、APIProxy 移除）可能影响启动器与模型配置。
-6. **版本显式化**：安装/升级必须写显式版本号，避免标签漂移。
-7. **凭据安全**：API Key 存放于 `%USERPROFILE%\.dsh\.credentials.yaml`，**不要提交到仓库或写入文档**；升级 dsh 不改变凭据。
+2. **升级前必须停止 dsh 服务**（故障 EBUSY 根因）：运行中的进程会锁定 `koffi.node` 等文件，导致安装失败或产生半成品目录。执行 `Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' } | Stop-Process -Force` 停止。
+3. **npm 12 的 allow-scripts 策略会静默破坏原生模块**（故障 B 根因）：升级 dsh 必须带 `--allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs`，装完立即核验 koffi 版本。
+4. **升级/重装后必须核验完整性**（第 1.4 节清单），尤其是 koffi 原生版本与 `dump-config`。
+5. **不要一边装一边杀进程**；让安装完整跑完，确需中断时先确认残留进程。
+6. **升级前评估破坏性变更**：阅读目标版本发布说明（速查见附录 B）；协议/配置变更（如 token 认证、APIProxy 移除）可能影响启动器与模型配置。
+7. **版本显式化**：安装/升级必须写显式版本号，避免标签漂移。
+8. **凭据安全**：API Key 存放于 `%USERPROFILE%\.dsh\.credentials.yaml`，**不要提交到仓库或写入文档**；升级 dsh 不改变凭据。
+9. **安装失败后的清理**：检查 `%TEMP%` 下的 `dsh-*` 残留目录并删除（每个可达数百 MB）；下次安装加 `--prefer-online` 绕过损坏的 npm 缓存。
 
 ### 1.8 附录 A：发布者本机环境快照（2026-09-01）
 
@@ -203,7 +265,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | Node.js | v26.7.0 | `C:\Program Files\nodejs` |
 | npm | 12.0.2 | 全局前缀 `C:\Users\20183\AppData\Roaming\npm` |
 | pnpm | 11.22.0 | 同上 |
-| @deepseek-ai/dsh | **0.1.2-alpha.3**（npm `alpha` 标签；latest/next = 0.1.1-rc.2） | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
+| @deepseek-ai/dsh | **0.1.2-rc.1**（npm `latest`/`next` 标签；alpha = 0.1.2-alpha.5） | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
 | Git | 2.55.0.4 | WinGet MinGit |
 | Python | 3.13.15 | `C:\Users\20183\Local\Programs\Python\Python313` |
 | DSHLauncher | v3.0.0（局域网共享 + 全新手机端 UI + 只读模式 + 归档清理） | `D:\DSHLauncher` |
@@ -219,7 +281,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 默认模型 | `deepseek-v4-flash`（reasoningEffort: high） |
 | 默认输出上限 | DSH 默认 `256K`（官方支持最大 384K） |
 
-导入模型目录（0.1.2-alpha.3 复核：与 0.1.2-alpha.2 一致，发布说明无模型变更条目）：
+导入模型目录（0.1.2-rc.1 复核：与 0.1.2-alpha.5 一致，rc.1 发布说明无模型变更条目。新增模型目录搜索筛选与子代理模型选择为 UI 交互功能，不影响模型目录本身）：
 
 | 模型 id | 上下文 | 输出上限 | 输入模态 |
 |---|---|---|---|
@@ -244,6 +306,10 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 0.1.2-alpha.1 | （GitHub，未上架 npm） | **APIProxy 移除 → @Remote 网关**；pi-ai 模型支持更新 + vLLM 思考预算；统一 `dsh` Profile 启动；WebFetch 默认开启（SSRF 防护） |
 | 0.1.2-alpha.2 | alpha（npm） | 含 alpha.1 全部变更；**Web 界面强制一次性 token 认证**（故障 D，启动器已适配）；恢复 `SessionEvent.ignorable`；RemoteError 统一封装；Node 24 启动修复 |
 | 0.1.2-alpha.3 | alpha（npm） | 长会话右侧导航/渲染内存优化、图片回显与投递修复、连接误判修复、窄视口定时计划修复；移除**可选** SQLite 持久化后端（zstd JSONL 不受影响）；**无事件结构 / API / token 认证契约变更**（手机端 UI 与局域网网关无需适配） |
+| 0.1.2-alpha.4 | alpha（npm） | 父 Agent 与可持续子 Agent 通过 `send_message` 双向传递后续消息；自定义模型发现复用 Profile 请求头、模型目录支持搜索筛选；超长会话流式渲染/导航预览内存优化；Python SDK/Headless/ACP 默认启用 `web_fetch`；Web PTC Mode 默认移除通用 `workflow` 工具；`Session.events` 被内部按需读取 API（`seq`/`eventAt()`/`snapshotEvents()`）取代（**外部 JSON-RPC API 契约未变**：`session/list`/`session/page`/`session/prompt` 响应结构不变，手机端 UI 与局域网网关无需适配） |
+| 0.1.2-alpha.5 | alpha（npm） | 修复从 0.1.1-rc.2 或 0.1.2-alpha.3 升级时启动失败或会话列表标题丢失的问题（**无 API 契约变更**） |
+| 0.1.2-rc.1 | latest/next（npm） | **0.1.2 首个候选版本**，汇总自 0.1.1-rc.2 以来的全部变更；**破坏性变更**：Session persistence API 改为生命周期持有的 `SessionHandle`，`agentLoop.create()` 改为异步并新增 session 锁；Session format 升级至 v2（旧 v0/v1 日志迁移至当前格式）；Remote 网关统一远程调用 API 与异常分发（旧 APIProxy 已移除）；新增 Inspector 工具、Web Preview、连接状态显示、子代理模型选择、回合导航、图片回显/投递修复等（**JSON-RPC API 契约与 alpha.4 一致**：手机端 UI 与局域网网关无需适配） |
+| 0.1.3-alpha.1 | （GitHub，未上架 npm） | **破坏性变更**：Session persistence API → `SessionHandle`，`agentLoop.create()` 异步 + session 锁；Session format v2；新增通用文件上传、HTTP 代理支持、`read_image` 图片直接渲染、模型探测增强（**JSON-RPC API 契约未确认是否变更**：待 npm 上架后核验） |
 | 启动器 v3.0.0 | — | 局域网共享与全新手机端专属 UI（非 dsh 原生）：会话分组折叠、聊天（历史/加载更早/大纲导航）、只读模式（前端隐藏 + 网关 API 拦截）、会话过滤（归档/子代理/空白）、归档会话一键彻底清理、PIN 轮换踢出所有设备、SW 随机化自动刷缓存 |
 
 > 核对命令：`npm view @deepseek-ai/dsh dist-tags`；发布说明见 `https://github.com/deepseek-ai/deepseek-harness/releases`。
@@ -263,3 +329,8 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | 2026-08-31（补2） | 版本升至 v2.0.0；手册并入 README（单文档随发布）；安装包部署 README、卸载脚本通用化 | ✅ |
 | 2026-09-01 | dsh 0.1.2-alpha.2 → **0.1.2-alpha.3**（npm alpha 标签）；核验：koffi 3.1.6 / node-pty 可加载 / 插件树 539 行无 error；确认事件结构、`dsh-auth-` cookie、token 契约无变更 → **手机端 UI 无需升级**；API 引用复核与附录 A 一致 | ✅ |
 | 2026-09-01（补） | 启动器全面修复并发布 v3.0.0：审查问题修复（归档清理/日志脱敏/网关安全等）、手机端 UI 修复（subagent 注入过滤、大纲独立分页、正序显示、标题换行）、运行日志 UTF-8 修复、dsh 升级至 0.1.2-alpha.3；手册拆分独立成文（本文件） | ✅ |
+| 2026-09-01（补2） | dsh 0.1.2-alpha.3 → **0.1.2-alpha.4**（npm alpha 标签）；核验：koffi 3.1.6 / node-pty 可加载 / 插件树 525 行无 error；确认 `Session.events` 内部 API 变更不影响外部 JSON-RPC 契约（`session/list`/`session/page`/`session/prompt` 响应结构不变）→ **手机端 UI 无需升级**；API 引用复核与附录 A 一致 | ✅ |
+| 2026-09-04 | dsh 0.1.2-alpha.4 → **0.1.2-alpha.5**（npm alpha 标签）；核验：koffi 3.2.1 / node-pty 可加载 / 插件树无 error；确认无 API 契约变更 → **手机端 UI 无需升级** | ✅ |
+| 2026-09-04（补） | 尝试升级 dsh 0.1.2-alpha.5 → **0.1.2-rc.1**，因运行中的 dsh 进程锁定 `koffi.node` 导致 EBUSY 安装失败；残留 `dsh-broken-*`、`dsh-partial-*` 等目录（约 409 MB）；按故障 EBUSY 流程修复：停止进程 → 清理残留 → 重装 alpha.4 | ⚠️ 已修复 |
+| 2026-09-04（补2） | 清理安装残留：删除 `%TEMP%` 下 9 个 `dsh-*` 残留目录（共约 409 MB）；更新维护手册第 1.3 节（新增"安装前停止 dsh"强制步骤、安装后清理流程）和故障 EBUSY | ✅ |
+| 2026-09-04（补3） | dsh 0.1.2-alpha.4 → **0.1.2-rc.1**（npm latest/next 标签）；核验：koffi 3.2.1 / node-pty 可加载 / 插件树无 error；确认 Session persistence API 内部变更（SessionHandle + session lock）不影响外部 JSON-RPC 契约 → **手机端 UI 无需升级**；API 引用复核与附录 A 一致 | ✅ |

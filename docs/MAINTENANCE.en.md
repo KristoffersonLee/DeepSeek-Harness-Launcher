@@ -82,10 +82,54 @@ If the prefix/permissions are wrong: use the system npm with an explicit prefix,
 `"C:\Program Files\nodejs\npm.cmd" install -g "@deepseek-ai/dsh@<version>" --prefix "<npm-prefix>" --no-audit --no-fund --prefer-online --allow-scripts=...`.
 If the default npm-cache reports EPERM, add `--cache <writable-directory>`.
 
-**Install discipline**
+**Pre-install preparation (mandatory)**
 
+- **You MUST stop the dsh web service before installing**, otherwise the running process locks files (e.g. `koffi.node`), causing install failures (EBUSY) or half-built directories:
+  ```powershell
+  # Find running dsh processes
+  Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' }
+  # Stop (if any)
+  Stop-Process -Id <PID> -Force
+  ```
 - Let the install **finish completely** (about 3–5 minutes); **do not kill processes mid-install** (interruptions once caused deadlocked workers and half-built directories).
 - Upgrading only changes files on disk; a running dsh web is unaffected. **Restart the launcher afterwards** to load the new version.
+
+**⚠️ Special case: upgrading remotely via an AI Agent inside DSH**
+
+When a user chats with an AI Agent (like this one) through the DSH Web UI and asks the Agent to upgrade dsh, a paradox arises:
+- The Agent runs inside the dsh process
+- The manual requires stopping dsh before upgrading
+- Stopping dsh = killing the Agent's own conversation channel
+
+**Resolution:**
+1. The Agent should **NOT execute** `Stop-Process` itself; instead, it should output the full upgrade commands for the user to run manually in an external terminal.
+2. The user runs stop → install → verify → restart in PowerShell / cmd.
+3. After the upgrade, the Agent can continue the conversation via the new dsh version.
+
+Example output template:
+```
+Since I run inside DSH, I cannot stop my own process. Please run these commands manually in a terminal:
+
+# 1. Stop dsh
+Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' } | Stop-Process -Force
+
+# 2. Install new version
+npm install -g "@deepseek-ai/dsh@<version>" --no-audit --no-fund --prefer-online --allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs
+
+# 3. Verify
+dsh --version
+
+# 4. Restart dsh
+dsh web
+```
+
+**Post-install cleanup**
+
+- Failed installs may leave `dsh-broken-*`, `dsh-partial-*`, `dsh-spill-*`, `dsh-subprocess-*` directories in `%TEMP%` (hundreds of MB each); clean up manually:
+  ```powershell
+  Get-ChildItem "$env:TEMP" -Directory | Where-Object { $_.Name -like 'dsh-*' } | Remove-Item -Recurse -Force
+  ```
+- After a failed install, corrupted tarballs may remain in the npm cache; add `--prefer-online` on the next install to bypass the cache.
 
 ### 1.4 Post-Upgrade Verification Checklist
 
@@ -161,6 +205,22 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
    Leftovers locked by a running launcher can be deleted **after restarting the launcher**.
 3. Delete the broken install (`Remove-Item "<npm-prefix>\node_modules\@deepseek-ai\dsh" -Recurse -Force`), reinstall completely (1.3), verify (1.4), then restart the launcher.
 
+**Failure EBUSY: Install fails (file locked)**
+
+- **Symptom**: `npm install -g @deepseek-ai/dsh@<version>` reports `EBUSY: resource busy or locked` or `EEXIST: file already exists`, install aborts.
+- **Cause**: A running dsh web process has locked files such as `koffi.node`; npm cannot overwrite them.
+- **Fix**:
+  1. **Stop the dsh process first**:
+     ```powershell
+     Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' } | Stop-Process -Force
+     ```
+  2. Clean residual directories (`%TEMP%\dsh-broken-*`, `dsh-partial-*`, `dsh-spill-*`, `dsh-subprocess-*`).
+  3. Reinstall (add `--prefer-online` to bypass cache):
+     ```powershell
+     npm install -g "@deepseek-ai/dsh@<version>" --no-audit --no-fund --prefer-online --allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs
+     ```
+  4. Verify with the checklist in section 1.4.
+
 **Failure F: Common false alarms (not problems)**
 
 | Phenomenon | Note |
@@ -185,12 +245,14 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 ### 1.7 Maintenance Rules & Pitfalls
 
 1. **The global npm prefix must match the one the launcher uses.** Confirm with `npm config get prefix` first; under multi-Node environments (e.g. another tool's managed Node) `npm` may point at a different prefix — the safest way is the system npm with an explicit `--prefix`.
-2. **npm 12's allow-scripts policy silently breaks native modules** (root cause of Failure B): always install dsh with `--allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs`, then verify koffi immediately.
-3. **Always verify integrity after upgrade/reinstall** (checklist in 1.4), especially the koffi native version and `dump-config`.
-4. **Never install while killing processes**; let the install finish; if you must interrupt, check for leftover processes first.
-5. **Assess breaking changes before upgrading**: read the target release notes (see Appendix B); protocol/config changes (e.g. token auth, APIProxy removal) may affect the launcher and model config.
-6. **Pin explicit versions** to avoid tag drift.
-7. **Credential safety**: API keys live in `%USERPROFILE%\.dsh\.credentials.yaml` — **never commit them to the repo or write them into documents**; upgrading dsh does not change credentials.
+2. **You MUST stop the dsh service before upgrading** (root cause of Failure EBUSY): a running process locks files such as `koffi.node`, causing install failures or half-built directories. Run `Get-Process -Name 'node' | Where-Object { $_.CommandLine -like '*dsh*' } | Stop-Process -Force` to stop.
+3. **npm 12's allow-scripts policy silently breaks native modules** (root cause of Failure B): always install dsh with `--allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs`, then verify koffi immediately.
+4. **Always verify integrity after upgrade/reinstall** (checklist in 1.4), especially the koffi native version and `dump-config`.
+5. **Never install while killing processes**; let the install finish; if you must interrupt, check for leftover processes first.
+6. **Assess breaking changes before upgrading**: read the target release notes (see Appendix B); protocol/config changes (e.g. token auth, APIProxy removal) may affect the launcher and model config.
+7. **Pin explicit versions** to avoid tag drift.
+8. **Credential safety**: API keys live in `%USERPROFILE%\.dsh\.credentials.yaml` — **never commit them to the repo or write them into documents**; upgrading dsh does not change credentials.
+9. **Cleanup after failed installs**: check `%TEMP%` for leftover `dsh-*` directories and delete them (hundreds of MB each); add `--prefer-online` on the next install to bypass a corrupted npm cache.
 
 ### 1.8 Appendix A: Publisher Machine Snapshot (2026-09-01)
 
@@ -203,7 +265,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | Node.js | v26.7.0 | `C:\Program Files\nodejs` |
 | npm | 12.0.2 | prefix `C:\Users\20183\AppData\Roaming\npm` |
 | pnpm | 11.22.0 | same |
-| @deepseek-ai/dsh | **0.1.2-alpha.3** (npm `alpha` tag; latest/next = 0.1.1-rc.2) | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
+| @deepseek-ai/dsh | **0.1.2-rc.1** (npm `latest`/`next` tag; alpha = 0.1.2-alpha.5) | `Roaming\npm\node_modules\@deepseek-ai\dsh` |
 | Git | 2.55.0.4 | WinGet MinGit |
 | Python | 3.13.15 | `C:\Users\20183\Local\Programs\Python\Python313` |
 | DSHLauncher | v3.0.0 (LAN sharing + standalone mobile UI + read-only mode + archive purge) | `D:\DSHLauncher` |
@@ -219,7 +281,7 @@ node -e "const p=require('<npm-prefix>/node_modules/@deepseek-ai/dsh/node_module
 | Default model | `deepseek-v4-flash` (reasoningEffort: high) |
 | Default output cap | dsh default `256K` (official max 384K) |
 
-Imported model catalog (re-verified on 0.1.2-alpha.3, identical to 0.1.2-alpha.2):
+Imported model catalog (re-verified on 0.1.2-rc.1, identical to 0.1.2-alpha.5; new model catalog search/filter and subagent model selection are UI features that do not affect the catalog itself):
 
 | Model id | Context | Output cap | Input modalities |
 |---|---|---|---|
@@ -244,6 +306,10 @@ Credential / API key references (secrets live in `C:\Users\20183\.dsh\.credentia
 | 0.1.2-alpha.1 | (GitHub only, not on npm) | **APIProxy removed → @Remote gateway**; pi-ai model support updates + vLLM thinking budget; unified `dsh` Profile startup; WebFetch enabled by default (SSRF protection) |
 | 0.1.2-alpha.2 | alpha (npm) | all alpha.1 changes; **one-time token auth on the Web UI** (Failure D, launcher adapted); restored `SessionEvent.ignorable`; unified RemoteError; Node 24 startup fix |
 | 0.1.2-alpha.3 | alpha (npm) | long-conversation right-nav & rendering memory improvements, image echo/delivery fixes, connection-misdetection fix, narrow-viewport schedule fix; removed the **optional** SQLite persistence backend (zstd JSONL unaffected); **no event-structure / API / token-auth contract changes** (mobile UI and LAN gateway need no adaptation) |
+| 0.1.2-alpha.4 | alpha (npm) | parent/continuable child Agents exchange follow-up messages via `send_message`; custom model discovery reuses Profile headers, model catalog supports search/filter; long-conversation streaming render/nav-preview memory optimizations; `web_fetch` enabled by default for Python SDK/Headless/ACP; general-purpose `workflow` tool removed by default in Web PTC Mode; `Session.events` replaced by internal on-demand read APIs (`seq`/`eventAt()`/`snapshotEvents()`) (**external JSON-RPC API contract unchanged**: `session/list`/`session/page`/`session/prompt` response structures intact — mobile UI and LAN gateway need no adaptation) |
+| 0.1.2-alpha.5 | alpha (npm) | fix startup failure or session title loss when upgrading from 0.1.1-rc.2 or 0.1.2-alpha.3 (**no API contract changes**) |
+| 0.1.2-rc.1 | latest/next (npm) | **first release candidate for 0.1.2**, summarizing all changes since 0.1.1-rc.2; **breaking change**: Session persistence API now owned by lifecycle-scoped `SessionHandle`s, `agentLoop.create()` is asynchronous with a new Session lock; Session format upgraded to v2 (old v0/v1 logs migrated to current format); Remote gateway unifies remote-call API and error dispatch (legacy APIProxy removed); new Inspector tool, Web Preview, connection status display, subagent model selection, turn navigation, image echo/delivery fixes, etc. (**JSON-RPC API contract identical to alpha.4**: mobile UI and LAN gateway need no adaptation) |
+| 0.1.3-alpha.1 | (GitHub only, not on npm) | **breaking change**: Session persistence API → `SessionHandle`, `agentLoop.create()` async + session lock; Session format v2; new features: generic file upload, HTTP proxy support, `read_image` direct rendering, enhanced model discovery (**JSON-RPC API contract NOT yet verified**: pending npm release) |
 | Launcher v3.0.0 | — | LAN sharing & standalone mobile UI (non-dsh-native): collapsible grouped session list, chat (history / load-earlier / outline nav), read-only mode (UI hidden + gateway API blocked), session filtering (archived/subagent/blank), one-click archived-session purge, PIN rotation kicks all devices, randomized SW version auto-flushes caches |
 
 > Check with `npm view @deepseek-ai/dsh dist-tags`; release notes at `https://github.com/deepseek-ai/deepseek-harness/releases`.
@@ -263,3 +329,8 @@ Credential / API key references (secrets live in `C:\Users\20183\.dsh\.credentia
 | 2026-08-31 (p2) | version bumped to v2.0.0; manual merged into README (single doc ships with release); installer ships README; uninstall script generalized | ✅ |
 | 2026-09-01 | dsh 0.1.2-alpha.2 → **0.1.2-alpha.3** (npm alpha tag); verified: koffi 3.1.6 / node-pty loadable / 539-line plugin tree, no error; confirmed event structure, `dsh-auth-` cookie and token contracts unchanged → **mobile UI upgrade NOT needed**; API references re-verified identical to Appendix A | ✅ |
 | 2026-09-01 (fix) | launcher full fix round & v3.0.0 release prep: audit fixes (archive purge / log redaction / gateway security), mobile UI fixes (subagent-injection filtering, paginated outline, chronological order, title wrapping), UTF-8 process output fix, dsh upgraded to 0.1.2-alpha.3; manual split into this standalone file | ✅ |
+| 2026-09-01 (p2) | dsh 0.1.2-alpha.3 → **0.1.2-alpha.4** (npm alpha tag); verified: koffi 3.1.6 / node-pty loadable / 529-line plugin tree, no error; confirmed `Session.events` internal API change does not affect external JSON-RPC contract (`session/list`/`session/page`/`session/prompt` response structures unchanged) → **mobile UI upgrade NOT needed**; API references re-verified identical to Appendix A | ✅ |
+| 2026-09-04 | dsh 0.1.2-alpha.4 → **0.1.2-alpha.5** (npm alpha tag); verified: koffi 3.2.1 / node-pty loadable / plugin tree, no error; confirmed no API contract changes → **mobile UI upgrade NOT needed** | ✅ |
+| 2026-09-04 (fix) | attempted dsh 0.1.2-alpha.5 → **0.1.2-rc.1** upgrade, failed with EBUSY because running dsh process locked `koffi.node`; left `dsh-broken-*`, `dsh-partial-*` directories (~409 MB); fixed per Failure EBUSY procedure: stop process → clean residuals → reinstall alpha.4 | ⚠️ fixed |
+| 2026-09-04 (p2) | cleaned install residuals: deleted 9 `dsh-*` residual directories from `%TEMP%` (~409 MB total); updated manual section 1.3 (added mandatory "stop dsh before upgrade" step, post-install cleanup) and Failure EBUSY | ✅ |
+| 2026-09-04 (p3) | dsh 0.1.2-alpha.4 → **0.1.2-rc.1** (npm latest/next tag); verified: koffi 3.2.1 / node-pty loadable / plugin tree, no error; confirmed Session persistence API internal change (SessionHandle + session lock) does not affect external JSON-RPC contract → **mobile UI upgrade NOT needed**; API references re-verified identical to Appendix A | ✅ |

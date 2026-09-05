@@ -36,7 +36,7 @@ namespace DSHLauncher
     internal static class Program
     {
         public const string AppName = "DeepSeek Harness Launcher";
-        public const string AppVersion = "3.0.0";
+        public const string AppVersion = "4.0.0";
         public static bool OpenGuideOnStart = false;
 
         [STAThread]
@@ -242,10 +242,24 @@ namespace DSHLauncher
                 string p = Path.Combine(la, "nodejs");
                 if (Directory.Exists(p))
                 {
+                    // 多版本共存时选版本号最大者（与安装包 Env.Detect 逻辑保持一致；
+                    // NTFS 目录枚举顺序不保证版本序，取首个可能选到旧版）
+                    Version best = null;
+                    string bestDir = null;
                     foreach (string d in Directory.GetDirectories(p, "node-v*"))
                     {
-                        string cand = Path.Combine(d, "node.exe");
-                        if (File.Exists(cand)) { NodePath = cand; break; }
+                        Match vm = Regex.Match(Path.GetFileName(d), @"^node-v(\d+)\.(\d+)\.(\d+)");
+                        if (!vm.Success) continue;
+                        Version v = new Version(
+                            int.Parse(vm.Groups[1].Value),
+                            int.Parse(vm.Groups[2].Value),
+                            int.Parse(vm.Groups[3].Value));
+                        if (best == null || v > best) { best = v; bestDir = d; }
+                    }
+                    if (bestDir != null)
+                    {
+                        string cand = Path.Combine(bestDir, "node.exe");
+                        if (File.Exists(cand)) NodePath = cand;
                     }
                     if (NodePath == null)
                     {
@@ -523,6 +537,7 @@ namespace DSHLauncher
         private bool stuckHarness = false;        // 端口被无响应残留进程占用且已确认为 DSH Harness
         private volatile bool probeInFlight = false; // 异步就绪探测进行中
         private volatile bool probeReady = false;    // 异步就绪探测最近一次结果
+        private volatile int probeGeneration = 0;    // 探测代际号：每次启动新服务递增，防止陈旧探测结果误判新服务就绪
         internal bool AppExiting = false;            // 程序真正退出中（用于内嵌窗口放行关闭）
         private HarnessWindow embedded = null;       // 内嵌 Harness 窗口（WebView2）
         private volatile string AuthenticatedUrl = null; // dsh web 输出的一次性 token URL（0.1.2-alpha 起认证必需；旧版本为 null 回退普通地址；跨线程读写需 volatile）
@@ -554,6 +569,16 @@ namespace DSHLauncher
             get { return settings.Port; }
         }
 
+        /// <summary>服务进程是否正在运行（已启动且未退出）。</summary>
+        private bool IsServerRunning
+        {
+            get
+            {
+                try { return server != null && !server.HasExited; }
+                catch { return false; }
+            }
+        }
+
         // ---------- 供设置窗口（SettingsForm）使用的内部接口 ----------
         internal string UiPortText { get { return settings.Port.ToString(); } }
         internal string UiWorkDir { get { return settings.WorkDir; } }
@@ -564,20 +589,23 @@ namespace DSHLauncher
         internal void RequestAppExit()
         {
             if (exitConfirmed) return;
-            bool serverRunning = server != null && !server.HasExited;
-            bool extRunning = externalPid > 0;
-            if (serverRunning || extRunning)
-            {
-                string names = (serverRunning ? "服务" : "")
-                    + (serverRunning && extRunning ? "、外部实例" : (extRunning ? "外部实例" : ""));
-                DialogResult r = MessageBox.Show(
-                    "DSH Harness 正在运行（" + names + "）。\n\n是否同时停止？\n选择“否”则继续在后台运行。",
-                    Program.AppName, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                if (r == DialogResult.Cancel) return; // 取消：不退出
-                exitKillService = (r == DialogResult.Yes);
-            }
+            DialogResult r = ConfirmServiceStop();
+            if (r == DialogResult.Cancel) return; // 取消：不退出
+            exitKillService = (r == DialogResult.Yes);
             exitConfirmed = true;
             Close(); // 触发 OnFormClosing 完成收尾
+        }
+
+        /// <summary>显示退出确认对话框（服务正在运行）。未在运行时直接返回 No。</summary>
+        internal DialogResult ConfirmServiceStop()
+        {
+            bool extRunning = externalPid > 0;
+            if (!IsServerRunning && !extRunning) return DialogResult.No;
+            string names = (IsServerRunning ? "服务" : "")
+                + (IsServerRunning && extRunning ? "、外部实例" : (extRunning ? "外部实例" : ""));
+            return MessageBox.Show(
+                "DSH Harness 正在运行（" + names + "）。\n\n是否同时停止？\n选择“否”则继续在后台运行。",
+                Program.AppName, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
         }
 
         // 打开设置窗口（原启动器面板已隐藏，设置窗口是唯一的设置入口）
@@ -602,7 +630,7 @@ namespace DSHLauncher
             }
             bool portChanged = p != settings.Port;
             bool workChanged = workDir != settings.WorkDir;
-            bool oursRunning = server != null && !server.HasExited;
+            bool oursRunning = IsServerRunning;
 
             // 若端口变更但新端口已被占用，拒绝切换（避免服务被停掉又起不来）
             if (portChanged && oursRunning && Engine.IsPortListening(p))
@@ -853,6 +881,21 @@ namespace DSHLauncher
 
 
 
+        // 清理“进程已退出但轮询尚未发现”的陈旧状态（返回 true 表示清除了陈旧状态）
+        private bool CleanupStaleServer()
+        {
+            if (server == null) return false;
+            bool exited = false;
+            try { exited = server.HasExited; }
+            catch { exited = true; }
+            if (!exited) return false;
+            ReleaseServer();
+            serverReady = false;
+            starting = false;
+            lostResponse = 0;
+            return true;
+        }
+
         // 释放服务进程对象并置空（进程已退出/已结束的场景；Dispose 只释放句柄，不杀进程）
         private void ReleaseServer()
         {
@@ -875,6 +918,7 @@ namespace DSHLauncher
         {
             if (probeInFlight) return;
             probeInFlight = true;
+            int gen = probeGeneration; // 捕获当前代际号，防止陈旧结果覆盖新服务状态
             try
             {
                 ThreadPool.QueueUserWorkItem(delegate
@@ -882,7 +926,8 @@ namespace DSHLauncher
                     bool ok = false;
                     try { ok = Engine.IsServerReady(port); }
                     catch { }
-                    probeReady = ok;
+                    // 仅当代际号未变时才写入结果：服务重启后代际号递增，陈旧探测结果被丢弃
+                    if (probeGeneration == gen) { probeReady = ok; }
                     probeInFlight = false;
                 });
             }
@@ -1077,19 +1122,7 @@ namespace DSHLauncher
         {
             int port = Port;
             // 清理“进程已退出但轮询尚未发现”的陈旧状态，避免误判仍在运行而卡住
-            if (server != null)
-            {
-                bool exited = false;
-                try { exited = server.HasExited; }
-                catch { exited = true; }
-                if (exited)
-                {
-                    ReleaseServer();
-                    serverReady = false;
-                    starting = false;
-                    lostResponse = 0;
-                }
-            }
+            CleanupStaleServer();
             if (server != null)
             {
                 if (userInitiated) Log("服务已在运行，直接打开界面。");
@@ -1168,6 +1201,7 @@ namespace DSHLauncher
                 starting = true;
                 serverReady = false;
                 probeReady = false; // 复位就绪探测结果，避免陈旧值误判新服务已就绪
+                probeGeneration++; // 递增代际号，使之前仍在飞行中的陈旧探测结果被丢弃
                 externalPid = 0;
                 adoptTried = false;
                 stuckHarness = false;
@@ -1203,18 +1237,7 @@ namespace DSHLauncher
         private void OnStopClick(object sender, EventArgs e)
         {
             // 清理“进程已退出但轮询尚未发现”的陈旧状态
-            if (server != null)
-            {
-                bool exited = false;
-                try { exited = server.HasExited; }
-                catch { exited = true; }
-                if (exited)
-                {
-                    ReleaseServer();
-                    serverReady = false;
-                    starting = false;
-                }
-            }
+            CleanupStaleServer();
             if (server != null)
             {
                 Log("正在停止服务（PID " + server.Id + "）…");
@@ -1421,8 +1444,7 @@ namespace DSHLauncher
                 catch { }
             }
             // 仅在外部/接管实例（非自启）且确认占用者是 DSH Harness 时重启以获取令牌
-            bool oursRunning = server != null;
-            try { if (server != null && server.HasExited) oursRunning = false; } catch { oursRunning = false; }
+            bool oursRunning = IsServerRunning;
             if (!haveToken && !oursRunning)
             {
                 int ownerPid = externalPid > 0 ? externalPid : Engine.FindPidOnPort(Port);
@@ -1797,7 +1819,7 @@ namespace DSHLauncher
                 if (deleted > 0)
                 {
                     Log("归档会话已清理，正在重启服务以生效…");
-                    if (server != null && !server.HasExited) { try { Engine.KillProcessTree(server); } catch { } }
+                    if (IsServerRunning) { try { Engine.KillProcessTree(server); } catch { } }
                     if (externalPid > 0) { try { Engine.KillProcessTree(externalPid); } catch { } }
                     ReleaseServer();
                     serverReady = false;
@@ -1902,7 +1924,7 @@ namespace DSHLauncher
                 Log("服务正在启动，请稍候再打开界面…");
                 return;
             }
-            bool running = (server != null && !server.HasExited) || Engine.IsServerReady(port);
+            bool running = IsServerRunning || Engine.IsServerReady(port);
             if (!running)
             {
                 Log("服务未运行，请先通过托盘菜单“启动服务”。");
@@ -2013,7 +2035,6 @@ namespace DSHLauncher
             catch { }
         }
 
-        // 定位 msedge.exe（标准安装目录 + 注册表 App Paths）
         // 刷新内嵌窗口（托盘菜单）
         private void RefreshEmbedded()
         {
@@ -2042,6 +2063,7 @@ namespace DSHLauncher
             }
         }
 
+        // 定位 msedge.exe（标准安装目录 + 注册表 App Paths）
         private static string FindEdgePath()
         {
             string[] candidates = new string[]
@@ -2116,7 +2138,7 @@ namespace DSHLauncher
             // 内嵌窗口“关闭并退出”（TrayOnClose 未勾选）：询问已在 RequestAppExit 完成
             if (exitConfirmed)
             {
-                bool srvRun = server != null && !server.HasExited;
+                bool srvRun = IsServerRunning;
                 bool extRun = externalPid > 0;
                 if (exitKillService)
                 {
@@ -2150,16 +2172,12 @@ namespace DSHLauncher
                 catch { }
                 return;
             }
-            bool serverRunning = server != null && !server.HasExited;
+            bool serverRunning = IsServerRunning;
             bool extRunning = externalPid > 0;
             bool killedAny = false;
             if (!forceExit && userClose && (serverRunning || extRunning))
             {
-                string names = (serverRunning ? "服务" : "")
-                    + (serverRunning && extRunning ? "、外部实例" : (extRunning ? "外部实例" : ""));
-                DialogResult r = MessageBox.Show(
-                    "DSH Harness 正在运行（" + names + "）。\n\n是否同时停止？\n选择“否”则继续在后台运行。",
-                    Program.AppName, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                DialogResult r = ConfirmServiceStop();
                 if (r == DialogResult.Cancel) { e.Cancel = true; pollTimer.Start(); return; }
                 if (r == DialogResult.Yes)
                 {
@@ -2238,6 +2256,198 @@ namespace DSHLauncher
             }
             catch { }
         }
+
+        // ---------------- dsh 升级辅助方法 ----------------
+        /// <summary>获取当前安装的 dsh 版本</summary>
+        internal string GetDshVersion()
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = "cmd.exe";
+                psi.Arguments = "/c dsh --version 2>&1";
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+                using (Process p = Process.Start(psi))
+                {
+                    string output = p.StandardOutput.ReadToEnd().Trim();
+                    p.WaitForExit(10000);
+                    // dsh --version 输出形如 "0.1.2-alpha.4" 或 "dsh 0.1.2-alpha.4"
+                    int spaceIdx = output.LastIndexOf(' ');
+                    if (spaceIdx >= 0) output = output.Substring(spaceIdx + 1).Trim();
+                    return output;
+                }
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>从 npm 查询最新 dsh 版本（latest 标签）</summary>
+        internal string GetLatestDshVersion(out string error)
+        {
+            error = "";
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = "cmd.exe";
+                psi.Arguments = "/c npm view @deepseek-ai/dsh dist-tags.latest 2>&1";
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+                using (Process p = Process.Start(psi))
+                {
+                    string output = p.StandardOutput.ReadToEnd().Trim();
+                    error = p.StandardError.ReadToEnd().Trim();
+                    p.WaitForExit(15000);
+                    foreach (string line in output.Split('\n'))
+                    {
+                        string trimmed = line.Trim();
+                        if (trimmed.Length > 0 && char.IsDigit(trimmed[0]))
+                            return trimmed;
+                    }
+                    return output;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return "";
+            }
+        }
+
+        /// <summary>升级 dsh 到指定版本</summary>
+        internal void UpgradeDsh(string version, Action<string, string> onProgress)
+        {
+            onProgress("停止服务", "正在停止 dsh web…");
+            try
+            {
+                foreach (Process p in Process.GetProcessesByName("node"))
+                {
+                    try
+                    {
+                        string cmd = Engine.GetCommandLine(p.Id);
+                        if (cmd != null && cmd.Contains("@deepseek-ai") && cmd.Contains("dsh"))
+                            Engine.KillProcessTree(p.Id);
+                    }
+                    catch { }
+                    finally { try { p.Dispose(); } catch { } }
+                }
+                DateTime deadline = DateTime.Now.AddSeconds(10);
+                while (DateTime.Now < deadline)
+                {
+                    bool anyRunning = false;
+                    foreach (Process p in Process.GetProcessesByName("node"))
+                    {
+                        try
+                        {
+                            string cmd = Engine.GetCommandLine(p.Id);
+                            if (cmd != null && cmd.Contains("@deepseek-ai") && cmd.Contains("dsh"))
+                            { anyRunning = true; break; }
+                        }
+                        catch { }
+                        finally { try { p.Dispose(); } catch { } }
+                    }
+                    if (!anyRunning) break;
+                    Thread.Sleep(500);
+                }
+            }
+            catch (Exception ex)
+            {
+                onProgress("失败", "停止服务失败: " + ex.Message);
+                return;
+            }
+
+            onProgress("安装", "正在安装 dsh " + version + "（约 3-5 分钟）…");
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = "cmd.exe";
+                psi.Arguments = "/c npm install -g \"@deepseek-ai/dsh@" + version + "\" --no-audit --no-fund --prefer-online --allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs 2>&1";
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.StandardErrorEncoding = Encoding.UTF8;
+                psi.WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+                using (Process p = Process.Start(psi))
+                {
+                    // 必须异步持续排空 stdout/stderr：npm install 输出远超 4KB 管道缓冲，
+                    // 若不读取，进程写满缓冲后阻塞，同步 ReadToEnd 互相等待造成死锁
+                    StringBuilder outBuf = new StringBuilder();
+                    p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null) { lock (outBuf) { outBuf.AppendLine(e.Data); } }
+                    };
+                    p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null) { lock (outBuf) { outBuf.AppendLine(e.Data); } }
+                    };
+                    p.BeginOutputReadLine();
+                    p.BeginErrorReadLine();
+                    if (!p.WaitForExit(300000))
+                    {
+                        try { Engine.KillProcessTree(p.Id); } catch { }
+                        onProgress("失败", "npm install 超时（5 分钟）已终止。");
+                        return;
+                    }
+                    if (p.ExitCode != 0)
+                    {
+                        string tail;
+                        lock (outBuf)
+                        {
+                            string all = outBuf.ToString().Trim();
+                            tail = all.Length > 500 ? "…" + all.Substring(all.Length - 500) : all;
+                        }
+                        onProgress("失败", "npm install 失败（退出码 " + p.ExitCode + "）: " + tail);
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                onProgress("失败", "安装失败: " + ex.Message);
+                return;
+            }
+
+            onProgress("验证", "正在验证安装…");
+            try
+            {
+                string newVer = GetDshVersion();
+                if (string.IsNullOrEmpty(newVer))
+                {
+                    onProgress("失败", "验证失败: 无法获取版本");
+                    return;
+                }
+                if (!newVer.Contains(version) && !version.Contains(newVer))
+                {
+                    onProgress("失败", "版本不匹配: 期望 " + version + "，实际 " + newVer);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                onProgress("失败", "验证失败: " + ex.Message);
+                return;
+            }
+
+            onProgress("重启", "正在重启 dsh web…");
+            try
+            {
+                StartServer();
+                onProgress("完成", "升级成功！版本: " + GetDshVersion());
+            }
+            catch (Exception ex)
+            {
+                onProgress("失败", "重启失败: " + ex.Message);
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -2253,6 +2463,13 @@ namespace DSHLauncher
         private TextBox txtLanUrl, txtManual;
         private TextBox txtLog;
         private Button btnDoc, btnLogDir, btnAbout, btnClose, btnCleanArch;
+        // dsh 升级
+        private GroupBox grpUpgrade;
+        private Label lblDshVer, lblDshLatest, lblUpgradeStatus;
+        private Button btnCheckUpgrade, btnUpgradeDsh;
+        private ProgressBar progUpgrade;
+        private string latestDshVersion = "";
+        private bool upgrading = false;
         private WebView2 lanQr;                 // 二维码（qrcode.js 渲染到 canvas）
         private bool qrReady = false;
         private string qrShownUrl = "";
@@ -2263,12 +2480,13 @@ namespace DSHLauncher
             this.host = host;
             this.ShowInTaskbar = false;
             this.Text = Program.AppName + " 设置";
-            this.ClientSize = new Size(680, 780);
-            this.MinimumSize = new Size(640, 710);
+            this.ClientSize = new Size(1000, 780);
+            this.MinimumSize = new Size(980, 720);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Microsoft YaHei UI", 9f);
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
+            // ==================== 左列 ====================
             // 端口
             Label lPort = new Label();
             lPort.SetBounds(16, 20, 48, 24);
@@ -2286,11 +2504,11 @@ namespace DSHLauncher
             lWork.TextAlign = ContentAlignment.MiddleLeft;
 
             txtWork = new TextBox();
-            txtWork.SetBounds(82, 56, 380, 26);
+            txtWork.SetBounds(82, 56, 280, 26);
             txtWork.Text = host.UiWorkDir;
 
             btnBrowseWork = new Button();
-            btnBrowseWork.SetBounds(468, 56, 92, 26);
+            btnBrowseWork.SetBounds(368, 56, 92, 26);
             btnBrowseWork.Text = "浏览…";
             btnBrowseWork.Click += delegate
             {
@@ -2300,19 +2518,18 @@ namespace DSHLauncher
                 if (dlg.ShowDialog(this) == DialogResult.OK) txtWork.Text = dlg.SelectedPath;
             };
 
-            // 唯一的行为选项：关闭时最小化到托盘（其余行为均为默认固定）
+            // 行为选项
             chkTray = new CheckBox();
             chkTray.SetBounds(16, 96, 190, 22);
             chkTray.Text = "关闭时最小化到托盘";
             chkTray.Checked = host.UiTray;
 
             btnSave = new Button();
-            btnSave.SetBounds(564, 92, 96, 30);
+            btnSave.SetBounds(368, 92, 96, 30);
             btnSave.Text = "保存设置";
             btnSave.Click += delegate
             {
                 host.CommitSettings(txtPort.Text.Trim(), txtWork.Text.Trim(), chkTray.Checked);
-                // 保存后同步回显示（端口校验失败时由宿主复位）
                 txtPort.Text = host.UiPortText;
                 txtWork.Text = host.UiWorkDir;
                 RefreshLanPanel();
@@ -2324,7 +2541,7 @@ namespace DSHLauncher
             lLog.Text = "运行日志:";
 
             txtLog = new TextBox();
-            txtLog.SetBounds(16, 156, 648, 120);
+            txtLog.SetBounds(16, 156, 444, 200);
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Both;
@@ -2339,63 +2556,64 @@ namespace DSHLauncher
             logMenu.Items.Add("复制全部", null, delegate { if (txtLog.TextLength > 0) Clipboard.SetText(txtLog.Text); });
             txtLog.ContextMenuStrip = logMenu;
 
-            // ==================== 局域网共享面板 ====================
-            // 用 Panel（客户区无标题偏移，坐标精确可控），避免 GroupBox 客户区下移导致控件超出被裁剪。
-            // 布局预算：Panel 高 320，内容最大底 316；手动命令区独立置于 Panel 下方。
+            // ==================== 右列：局域网共享 ====================
             Panel pLan = new Panel();
-            pLan.SetBounds(12, 290, 656, 340);
+            pLan.SetBounds(472, 12, 540, 380);
             pLan.BorderStyle = BorderStyle.FixedSingle;
             pLan.BackColor = Color.FromArgb(252, 252, 252);
 
+            // 第1行：开关
             chkLan = new CheckBox();
-            chkLan.SetBounds(16, 8, 320, 20);
+            chkLan.SetBounds(12, 8, 320, 20);
             chkLan.Text = "允许局域网访问（默认关闭）";
             chkLan.Checked = host.UiLanEnabled;
 
+            // 第2行：端口
             Label lLanPort = new Label();
-            lLanPort.SetBounds(16, 32, 44, 22);
+            lLanPort.SetBounds(12, 32, 44, 22);
             lLanPort.Text = "端口:";
             lLanPort.TextAlign = ContentAlignment.MiddleLeft;
 
             txtLanPort = new TextBox();
-            txtLanPort.SetBounds(60, 32, 58, 26);
+            txtLanPort.SetBounds(56, 32, 58, 26);
             txtLanPort.Text = host.UiLanPortText;
 
             lblLanStatus = new Label();
-            lblLanStatus.SetBounds(128, 32, 500, 22);
+            lblLanStatus.SetBounds(124, 32, 400, 22);
             lblLanStatus.ForeColor = Color.FromArgb(70, 70, 70);
 
+            // 第3行：URL + 按钮
             txtLanUrl = new TextBox();
-            txtLanUrl.SetBounds(16, 62, 472, 26);
+            txtLanUrl.SetBounds(12, 62, 360, 26);
             txtLanUrl.ReadOnly = true;
             txtLanUrl.BackColor = Color.White;
 
             btnCopyUrl = new Button();
-            btnCopyUrl.SetBounds(496, 62, 68, 26);
-            btnCopyUrl.Text = "复制地址";
+            btnCopyUrl.SetBounds(380, 62, 68, 26);
+            btnCopyUrl.Text = "复制";
             btnCopyUrl.Click += delegate { Clipboard.SetText(txtLanUrl.Text); };
 
             btnOpenLan = new Button();
-            btnOpenLan.SetBounds(572, 62, 68, 26);
+            btnOpenLan.SetBounds(456, 62, 72, 26);
             btnOpenLan.Text = "打开";
             btnOpenLan.Click += delegate { host.OpenLanInBrowser(); };
 
-            // 二维码（WebView2 + qrcode.js；控件需大于 QR 页面内容 220 容器 + 边距）
+            // 第4-6行：二维码(左) + PIN/防火墙(右)
             lanQr = new WebView2();
-            lanQr.SetBounds(16, 94, 232, 226);
+            lanQr.SetBounds(12, 96, 220, 220);
             lanQr.DefaultBackgroundColor = Color.White;
 
-            // PIN（右侧，x=262 起）
+            // PIN
             Label lblPin = new Label();
-            lblPin.SetBounds(262, 92, 160, 18);
+            lblPin.SetBounds(244, 96, 160, 18);
             lblPin.Text = "访问密码 (PIN):";
 
             txtLanPin = new TextBox();
-            txtLanPin.SetBounds(262, 112, 120, 24);
+            txtLanPin.SetBounds(244, 116, 120, 24);
             txtLanPin.UseSystemPasswordChar = true;
 
             btnGenPin = new Button();
-            btnGenPin.SetBounds(390, 112, 100, 24);
+            btnGenPin.SetBounds(370, 116, 120, 24);
             btnGenPin.Text = "重新生成";
             btnGenPin.Click += delegate
             {
@@ -2407,28 +2625,28 @@ namespace DSHLauncher
             };
 
             lblPinSrc = new Label();
-            lblPinSrc.SetBounds(262, 140, 380, 16);
+            lblPinSrc.SetBounds(244, 144, 280, 16);
             lblPinSrc.ForeColor = Color.Gray;
             lblPinSrc.Font = new Font("Microsoft YaHei UI", 8.5f);
 
             Label lblPinHint = new Label();
-            lblPinHint.SetBounds(262, 156, 380, 32);
-            lblPinHint.Text = "留空 = 自动生成；也可在 .env 中配置 DSH_LAN_PIN（环境变量优先）。";
+            lblPinHint.SetBounds(244, 160, 280, 32);
+            lblPinHint.Text = "留空 = 自动生成；也可在 .env 中配置 DSH_LAN_PIN。";
             lblPinHint.ForeColor = Color.Gray;
             lblPinHint.Font = new Font("Microsoft YaHei UI", 8.5f);
 
             // 防火墙
             Label lblFwTitle = new Label();
-            lblFwTitle.SetBounds(262, 192, 56, 18);
+            lblFwTitle.SetBounds(244, 196, 56, 18);
             lblFwTitle.Text = "防火墙:";
             lblFwTitle.TextAlign = ContentAlignment.MiddleLeft;
 
             lblFwStatus = new Label();
-            lblFwStatus.SetBounds(318, 192, 320, 18);
+            lblFwStatus.SetBounds(300, 196, 230, 18);
             lblFwStatus.ForeColor = Color.FromArgb(70, 70, 70);
 
             btnFwElevated = new Button();
-            btnFwElevated.SetBounds(262, 212, 200, 24);
+            btnFwElevated.SetBounds(244, 216, 284, 24);
             btnFwElevated.Text = "以管理员身份配置防火墙";
             btnFwElevated.Click += delegate
             {
@@ -2437,10 +2655,9 @@ namespace DSHLauncher
             };
 
             lblOllama = new Label();
-            lblOllama.SetBounds(262, 240, 380, 30);
+            lblOllama.SetBounds(244, 244, 284, 30);
             lblOllama.ForeColor = Color.FromArgb(120, 100, 40);
             lblOllama.Font = new Font("Microsoft YaHei UI", 8.5f);
-            // 文案由 RefreshLanPanel 按 LAN 开关状态动态设置（此处为初始占位）
             lblOllama.Text = "";
 
             // 事件
@@ -2458,7 +2675,6 @@ namespace DSHLauncher
                     RefreshLanPanel();
                 }
             };
-            // PIN 输入失焦即保存（无论 LAN 开关状态）：自定义 PIN 必须可靠生效
             txtLanPin.Leave += delegate
             {
                 if (txtLanPin.Text.Trim() != host.UiLanPin)
@@ -2486,13 +2702,14 @@ namespace DSHLauncher
             pLan.Controls.Add(btnFwElevated);
             pLan.Controls.Add(lblOllama);
 
-            // 手动命令（无管理员权限时的备用方案，独立置于面板下方）
+            // ==================== 底部区域 ====================
+            // 手动命令
             Label lblManualTitle = new Label();
-            lblManualTitle.SetBounds(12, 646, 460, 18);
+            lblManualTitle.SetBounds(16, 370, 460, 18);
             lblManualTitle.Text = "防火墙手动命令（自动配置失败时，管理员执行）：";
 
             txtManual = new TextBox();
-            txtManual.SetBounds(12, 666, 492, 62);
+            txtManual.SetBounds(16, 390, 816, 56);
             txtManual.Multiline = true;
             txtManual.ReadOnly = true;
             txtManual.BackColor = Color.FromArgb(245, 245, 245);
@@ -2502,36 +2719,81 @@ namespace DSHLauncher
             txtManual.WordWrap = false;
 
             btnCopyCmd = new Button();
-            btnCopyCmd.SetBounds(512, 682, 130, 28);
+            btnCopyCmd.SetBounds(840, 408, 130, 28);
             btnCopyCmd.Text = "复制手动命令";
             btnCopyCmd.Click += delegate { Clipboard.SetText(txtManual.Text); };
 
-            // 底部
+            // dsh 升级
+            grpUpgrade = new GroupBox();
+            grpUpgrade.SetBounds(16, 460, 968, 100);
+            grpUpgrade.Text = "dsh 升级";
+
+            lblDshVer = new Label();
+            lblDshVer.SetBounds(16, 22, 260, 22);
+            lblDshVer.Text = "当前版本: 检测中…";
+            lblDshVer.TextAlign = ContentAlignment.MiddleLeft;
+
+            lblDshLatest = new Label();
+            lblDshLatest.SetBounds(16, 48, 260, 22);
+            lblDshLatest.Text = "最新版本: 点击检查";
+            lblDshLatest.TextAlign = ContentAlignment.MiddleLeft;
+
+            btnCheckUpgrade = new Button();
+            btnCheckUpgrade.SetBounds(280, 20, 90, 26);
+            btnCheckUpgrade.Text = "检查更新";
+            btnCheckUpgrade.Click += BtnCheckUpgradeClick;
+
+            btnUpgradeDsh = new Button();
+            btnUpgradeDsh.SetBounds(280, 50, 90, 26);
+            btnUpgradeDsh.Text = "升级 dsh";
+            btnUpgradeDsh.Enabled = false;
+            btnUpgradeDsh.Click += BtnUpgradeDshClick;
+
+            progUpgrade = new ProgressBar();
+            progUpgrade.SetBounds(380, 22, 572, 20);
+            progUpgrade.Style = ProgressBarStyle.Marquee;
+            progUpgrade.MarqueeAnimationSpeed = 0;
+            progUpgrade.Visible = false;
+
+            lblUpgradeStatus = new Label();
+            lblUpgradeStatus.SetBounds(380, 48, 572, 22);
+            lblUpgradeStatus.Text = "";
+            lblUpgradeStatus.TextAlign = ContentAlignment.MiddleLeft;
+
+            grpUpgrade.Controls.Add(lblDshVer);
+            grpUpgrade.Controls.Add(lblDshLatest);
+            grpUpgrade.Controls.Add(btnCheckUpgrade);
+            grpUpgrade.Controls.Add(btnUpgradeDsh);
+            grpUpgrade.Controls.Add(progUpgrade);
+            grpUpgrade.Controls.Add(lblUpgradeStatus);
+
+            // 底部按钮
             btnDoc = new Button();
-            btnDoc.SetBounds(16, 746, 96, 30);
+            btnDoc.SetBounds(16, 580, 96, 30);
             btnDoc.Text = "使用文档";
             btnDoc.Click += delegate { GuideForm.ShowGuide(this); };
 
             btnLogDir = new Button();
-            btnLogDir.SetBounds(120, 746, 116, 30);
+            btnLogDir.SetBounds(120, 580, 116, 30);
             btnLogDir.Text = "打开日志目录";
             btnLogDir.Click += delegate { host.OpenLogDir(); };
 
             btnCleanArch = new Button();
-            btnCleanArch.SetBounds(352, 746, 140, 30);
+            btnCleanArch.SetBounds(244, 580, 140, 30);
             btnCleanArch.Text = "清理归档会话";
             btnCleanArch.Click += delegate { host.CleanArchivedSessions(); };
 
             btnAbout = new Button();
-            btnAbout.SetBounds(244, 746, 100, 30);
+            btnAbout.SetBounds(392, 580, 100, 30);
             btnAbout.Text = "关于此程序";
             btnAbout.Click += delegate { host.ShowAbout(); };
 
             btnClose = new Button();
-            btnClose.SetBounds(564, 746, 96, 30);
+            btnClose.SetBounds(888, 580, 96, 30);
             btnClose.Text = "关闭";
             btnClose.Click += delegate { Close(); };
 
+            // ==================== 添加控件到窗体 ====================
             this.Controls.Add(lPort);
             this.Controls.Add(txtPort);
             this.Controls.Add(lWork);
@@ -2541,10 +2803,11 @@ namespace DSHLauncher
             this.Controls.Add(btnSave);
             this.Controls.Add(lLog);
             this.Controls.Add(txtLog);
-                        this.Controls.Add(pLan);
+            this.Controls.Add(pLan);
             this.Controls.Add(lblManualTitle);
             this.Controls.Add(txtManual);
             this.Controls.Add(btnCopyCmd);
+            this.Controls.Add(grpUpgrade);
             this.Controls.Add(btnDoc);
             this.Controls.Add(btnLogDir);
             this.Controls.Add(btnCleanArch);
@@ -2559,7 +2822,6 @@ namespace DSHLauncher
                 try { if (refreshTimer != null) refreshTimer.Stop(); } catch { }
             };
 
-            // 局域网状态定时刷新（网关/防火墙状态变化时同步界面）
             refreshTimer = new System.Windows.Forms.Timer();
             refreshTimer.Interval = 1500;
             refreshTimer.Tick += delegate { RefreshLanPanel(); };
@@ -2592,6 +2854,154 @@ namespace DSHLauncher
             WindowState = FormWindowState.Normal;
             Activate();
             RefreshLanPanel();
+            // 打开设置窗口时自动检测当前版本
+            if (lblDshVer.Text.Contains("检测中"))
+            {
+                CheckCurrentVersion();
+            }
+        }
+
+        // ---------------- dsh 升级 ----------------
+        private void CheckCurrentVersion()
+        {
+            try
+            {
+                string ver = host.GetDshVersion();
+                if (!string.IsNullOrEmpty(ver))
+                    lblDshVer.Text = "当前版本: " + ver;
+                else
+                    lblDshVer.Text = "当前版本: 未安装";
+            }
+            catch (Exception ex)
+            {
+                lblDshVer.Text = "当前版本: 检测失败(" + ex.Message + ")";
+            }
+        }
+
+        private void BtnCheckUpgradeClick(object sender, EventArgs e)
+        {
+            if (upgrading) return;
+            btnCheckUpgrade.Enabled = false;
+            lblDshLatest.Text = "最新版本: 检查中…";
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    string err = "";
+                    string latest = host.GetLatestDshVersion(out err);
+                    // 窗体可能在查询期间被关闭，回调前守卫避免崩溃
+                    if (IsDisposed) return;
+                    Invoke((Action)(delegate
+                    {
+                        if (IsDisposed) return;
+                        if (!string.IsNullOrEmpty(latest))
+                        {
+                            latestDshVersion = latest;
+                            lblDshLatest.Text = "最新版本: " + latest;
+                            string current = lblDshVer.Text.Replace("当前版本: ", "");
+                            if (current == latest || current == "未安装")
+                            {
+                                btnUpgradeDsh.Enabled = false;
+                                lblUpgradeStatus.Text = "已是最新版本";
+                            }
+                            else
+                            {
+                                btnUpgradeDsh.Enabled = true;
+                                lblUpgradeStatus.Text = "可升级";
+                            }
+                        }
+                        else
+                        {
+                            lblDshLatest.Text = "最新版本: 检测失败";
+                            lblUpgradeStatus.Text = err.Length > 60 ? err.Substring(0, 60) + "…" : err;
+                        }
+                        btnCheckUpgrade.Enabled = true;
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    if (IsDisposed) return;
+                    Invoke((Action)(delegate
+                    {
+                        if (IsDisposed) return;
+                        lblDshLatest.Text = "最新版本: 检测失败";
+                        lblUpgradeStatus.Text = ex.Message.Length > 60 ? ex.Message.Substring(0, 60) + "…" : ex.Message;
+                        btnCheckUpgrade.Enabled = true;
+                    }));
+                }
+            });
+        }
+
+        private void BtnUpgradeDshClick(object sender, EventArgs e)
+        {
+            if (upgrading) return;
+            if (string.IsNullOrEmpty(latestDshVersion)) return;
+            var r = MessageBox.Show(
+                "将升级 dsh 到 " + latestDshVersion + "。\n\n升级过程会：\n1. 停止 dsh web 服务\n2. 执行 npm install（约 3-5 分钟）\n3. 验证安装\n4. 重启服务\n\n期间会断开连接，是否继续？",
+                "升级 dsh", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (r != DialogResult.Yes) return;
+
+            upgrading = true;
+            btnUpgradeDsh.Enabled = false;
+            btnCheckUpgrade.Enabled = false;
+            progUpgrade.Visible = true;
+            progUpgrade.MarqueeAnimationSpeed = 30;
+            lblUpgradeStatus.Text = "正在升级…";
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    host.UpgradeDsh(latestDshVersion, OnUpgradeProgress);
+                }
+                catch (Exception ex)
+                {
+                    Invoke((Action)(delegate
+                    {
+                        upgrading = false;
+                        btnUpgradeDsh.Enabled = true;
+                        btnCheckUpgrade.Enabled = true;
+                        progUpgrade.Visible = false;
+                        progUpgrade.MarqueeAnimationSpeed = 0;
+                        lblUpgradeStatus.Text = "升级失败: " + ex.Message;
+                    }));
+                }
+            });
+        }
+
+        private void OnUpgradeProgress(string stage, string message)
+        {
+            // 升级在后台线程执行，窗体可能已关闭：直接 Invoke 会抛 ObjectDisposedException
+            // 且在线程池线程上未捕获导致整个进程崩溃，必须守卫
+            if (IsDisposed || Disposing) return;
+            try
+            {
+                Invoke((Action)(delegate
+                {
+                    if (IsDisposed) return;
+                    lblUpgradeStatus.Text = stage + ": " + message;
+                    if (stage == "完成")
+                    {
+                        upgrading = false;
+                        progUpgrade.Visible = false;
+                        progUpgrade.MarqueeAnimationSpeed = 0;
+                        btnCheckUpgrade.Enabled = true;
+                        btnUpgradeDsh.Enabled = false;
+                        CheckCurrentVersion();
+                        lblDshLatest.Text = "最新版本: " + latestDshVersion;
+                    }
+                    else if (stage == "失败")
+                    {
+                        upgrading = false;
+                        btnUpgradeDsh.Enabled = true;
+                        btnCheckUpgrade.Enabled = true;
+                        progUpgrade.Visible = false;
+                        progUpgrade.MarqueeAnimationSpeed = 0;
+                    }
+                }));
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
 
         // ---------------- 局域网面板刷新 + 二维码 ----------------
@@ -2634,7 +3044,8 @@ namespace DSHLauncher
         }
 
         // 二维码 WebView2 环境缓存（同进程复用同一 user-data-folder，窗体重建不重复创建）
-        private static CoreWebView2Environment cachedQrEnv = null;
+        // 缓存 Task 而非 Result：避免多线程竞态下重复创建环境。
+        private static Task<CoreWebView2Environment> cachedQrEnvTask = null;
         private static readonly object cachedQrEnvLock = new object();
 
         private void InitQrWebView2()
@@ -2651,18 +3062,15 @@ namespace DSHLauncher
                 Task<CoreWebView2Environment> envTask;
                 lock (cachedQrEnvLock)
                 {
-                    envTask = cachedQrEnv != null ? Task.FromResult(cachedQrEnv) : null;
-                }
-                if (envTask == null)
-                {
-                    envTask = CoreWebView2Environment.CreateAsync(null, profile, opt);
-                    envTask.ContinueWith(delegate(Task<CoreWebView2Environment> t)
+                    if (cachedQrEnvTask != null)
                     {
-                        if (t.Status == TaskStatus.RanToCompletion)
-                        {
-                            lock (cachedQrEnvLock) { if (cachedQrEnv == null) cachedQrEnv = t.Result; }
-                        }
-                    });
+                        envTask = cachedQrEnvTask;
+                    }
+                    else
+                    {
+                        envTask = CoreWebView2Environment.CreateAsync(null, profile, opt);
+                        cachedQrEnvTask = envTask;
+                    }
                 }
                 envTask.ContinueWith(
                     delegate(Task<CoreWebView2Environment> t)
@@ -2845,8 +3253,9 @@ namespace DSHLauncher
         }
 
         // WebView2 环境缓存：同一进程对同一 user-data-folder 重复 CreateAsync 会失败，
-        // 窗体重建时复用已创建的环境（static 跨实例共享）
-        private static CoreWebView2Environment cachedEnv = null;
+        // 窗体重建时复用已创建的环境（static 跨实例共享）。
+        // 缓存 Task 而非 Result：避免多线程竞态下重复创建环境（CreateAsync 在锁内发起，首个完成后缓存 Task，后续直接复用）。
+        private static Task<CoreWebView2Environment> cachedEnvTask = null;
         private static readonly object cachedEnvLock = new object();
 
         private void InitWebView2()
@@ -2865,18 +3274,15 @@ namespace DSHLauncher
                 Task<CoreWebView2Environment> envTask;
                 lock (cachedEnvLock)
                 {
-                    envTask = cachedEnv != null ? Task.FromResult(cachedEnv) : null;
-                }
-                if (envTask == null)
-                {
-                    envTask = CoreWebView2Environment.CreateAsync(null, profile, opt);
-                    envTask.ContinueWith(delegate(Task<CoreWebView2Environment> t)
+                    if (cachedEnvTask != null)
                     {
-                        if (t.Status == TaskStatus.RanToCompletion)
-                        {
-                            lock (cachedEnvLock) { if (cachedEnv == null) cachedEnv = t.Result; }
-                        }
-                    });
+                        envTask = cachedEnvTask;
+                    }
+                    else
+                    {
+                        envTask = CoreWebView2Environment.CreateAsync(null, profile, opt);
+                        cachedEnvTask = envTask;
+                    }
                 }
                 envTask.ContinueWith(
                     delegate(Task<CoreWebView2Environment> t)

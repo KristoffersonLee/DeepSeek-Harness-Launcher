@@ -108,7 +108,12 @@ function cookieOk(value) {
   const expect = crypto.createHmac('sha256', SECRET).update(String(exp)).digest('base64url');
   const a = Buffer.from(parts[1] || '');
   const b = Buffer.from(expect);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  // 恒定时间比较：长度不等时与等长零缓冲区比较（消耗近似时间），避免泄露期望签名长度
+  if (a.length !== b.length) {
+    crypto.timingSafeEqual(a, Buffer.alloc(a.length));
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
 }
 function readCookies(req) {
   const out = {};
@@ -174,13 +179,16 @@ function extractAuthCookie(setCookieHeaders) {
   return '';
 }
 let lastExchangeAttempt = 0;
+let exchanging = false; // 并发保护：防止多个请求同时触发兑换
 async function exchangeToken() {
   const nowMs = Date.now();
+  if (exchanging) return false; // 已有兑换在进行中，跳过
   if (nowMs - lastExchangeAttempt < 10000) return false; // 失败退避：10 秒内不重复尝试
+  exchanging = true;
   lastExchangeAttempt = nowMs;
-  const token = readToken();
-  if (!token) return false;
   try {
+    const token = readToken();
+    if (!token) return false;
     const base = TARGET.endsWith('/') ? TARGET.slice(0, -1) : TARGET;
     const res = await fetch(base + '/?token=' + encodeURIComponent(token), {
       redirect: 'manual',
@@ -193,12 +201,17 @@ async function exchangeToken() {
     if (c) { dshCookie = c; log('dsh 令牌兑换成功（进程 Cookie 已就绪）'); return true; }
     log('令牌兑换未获得 Cookie（HTTP ' + res.status + '）');
   } catch (e) { log('令牌兑换失败: ' + e.message); }
+  finally { exchanging = false; }
   return false;
 }
 async function ensureDshCookie() {
   if (dshCookie) return true;
   return exchangeToken();
 }
+// 定期尝试兑换令牌：启动时若 dsh 未就绪导致兑换失败，无需等 401 触发，每 30 秒自动重试
+setInterval(function () {
+  if (!dshCookie && readToken()) exchangeToken().catch(function () {});
+}, 30000);
 
 // ---------------- PWA：manifest / service worker / 图标 / HTML 注入 ----------------
 const MANIFEST = {
@@ -989,7 +1002,7 @@ const server = http.createServer((req, res) => {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
       'clear-site-data': '"cache", "storage"'
-    }, '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>缓存已清理</title><style>body{font-family:system-ui,sans-serif;background:#0f1115;color:#e6e9f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px;text-align:center}.c{max-width:420px}h1{font-size:20px}p{font-size:15px;color:#9aa3b5;line-height:1.7}</style></head><body><div class="c"><h1>缓存已清理 ✓</h1><p>旧版缓存已清除。请关闭此页面，重新打开<br>http://192.168.5.5:' + PORT + '/ 并输入 PIN。</p></div></body></html>');
+    }, '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>缓存已清理</title><style>body{font-family:system-ui,sans-serif;background:#0f1115;color:#e6e9f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px;text-align:center}.c{max-width:420px}h1{font-size:20px}p{font-size:15px;color:#9aa3b5;line-height:1.7}</style></head><body><div class="c"><h1>缓存已清理 ✓</h1><p>旧版缓存已清除。请关闭此页面，重新打开<br>http://' + HOST + ':' + PORT + '/ 并输入 PIN。</p></div></body></html>');
     return;
   }
   if (url === '/__lan/manifest.webmanifest') {

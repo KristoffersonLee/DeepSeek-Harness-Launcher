@@ -27,7 +27,7 @@ namespace DSHSetup
     internal static class Program
     {
         public const string AppName = "DeepSeek Harness Launcher";
-        public const string AppVersion = "3.0.0";
+        public const string AppVersion = "4.0.0";
         public const string InstallSubDir = "DSHLauncher";
         public const string ShortcutName = "DeepSeek Harness Launcher";
 
@@ -197,10 +197,20 @@ namespace DSHSetup
                 string dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
                     "Microsoft", "EdgeWebView", "Application");
-                if (Directory.Exists(dir)
-                    && Directory.GetFiles(dir, "msedgewebview2.exe", SearchOption.AllDirectories).Length > 0)
+                if (Directory.Exists(dir))
                 {
-                    return true;
+                    // msedgewebview2.exe 位于各版本子目录根：只扫一层，
+                    // 避免 AllDirectories 递归遍历整个运行时目录（数十万文件）拖慢检测
+                    string exe = Path.Combine(dir, "msedgewebview2.exe");
+                    bool found = File.Exists(exe);
+                    if (!found)
+                    {
+                        foreach (string sub in Directory.GetDirectories(dir))
+                        {
+                            if (File.Exists(Path.Combine(sub, "msedgewebview2.exe"))) { found = true; break; }
+                        }
+                    }
+                    if (found) return true;
                 }
             }
             catch { }
@@ -359,6 +369,7 @@ namespace DSHSetup
         {
             for (int attempt = 1; attempt <= 3; attempt++)
             {
+                if (attempt > 1) Thread.Sleep(1000 * (attempt - 1)); // 退避：1s / 2s，弱网下连发无意义
                 try
                 {
                     if (log != null && attempt > 1) log("下载失败，正在重试（第 " + attempt + " 次）…");
@@ -719,6 +730,17 @@ namespace DSHSetup
                 "del \"%USERPROFILE%\\Desktop\\DeepSeek Harness Launcher*.lnk\" >nul 2>&1\r\n" +
                 // 兼容 OneDrive 重定向的桌面（新旧两种快捷方式名都清掉）
                 "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"Get-ChildItem (Join-Path ([Environment]::GetFolderPath('Desktop')) '*.lnk') -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'DSH Harness *.lnk' -or $_.Name -like 'DeepSeek Harness Launcher*.lnk' } | Remove-Item -Force\" >nul 2>&1\r\n" +
+                // 清理防火墙规则（DSHLauncher LAN * 匹配所有端口）
+                "netsh advfirewall firewall delete rule name=\"DSHLauncher LAN *\" >nul 2>&1\r\n" +
+                // 清理 %APPDATA%\DSHLauncher\ 下的凭据与网关脚本；
+                // settings.ini 保留（与 README 卸载说明一致：重装后配置不丢失）
+                "del /f /q \"%APPDATA%\\DSHLauncher\\lan-pin.txt\" >nul 2>&1\r\n" +
+                "del /f /q \"%APPDATA%\\DSHLauncher\\lan-token.txt\" >nul 2>&1\r\n" +
+                "del /f /q \"%APPDATA%\\DSHLauncher\\lan-secret.txt\" >nul 2>&1\r\n" +
+                "del /f /q \"%APPDATA%\\DSHLauncher\\.env\" >nul 2>&1\r\n" +
+                "del /f /q \"%APPDATA%\\DSHLauncher\\lan-gateway.mjs\" >nul 2>&1\r\n" +
+                // 清理 %LOCALAPPDATA%\DSHLauncher\ 下的运行日志与内嵌浏览器缓存（webview2-profile / edge-profile）
+                "rd /s /q \"%LOCALAPPDATA%\\DSHLauncher\" >nul 2>&1\r\n" +
                 // 延迟删除安装目录（等本 cmd 退出避免占用）；带保护，拒绝删除盘符根目录/系统目录
                 "start \"\" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"" +
                 "Start-Sleep 2; $p='" + psEscape + "'; " +
@@ -1056,8 +1078,8 @@ namespace DSHSetup
         {
             for (int i = 0; i < pages.Length; i++) pages[i].Visible = (i == n);
             btnBack.Visible = n > 0;
-            btnBack.Enabled = !deploying && !(n == 3 && installDone);
-            btnNext.Enabled = !deploying && !(n == 3 && !installDone && !installing);
+            btnBack.Enabled = !deploying && !installing && !(n == 3 && installDone);
+            btnNext.Enabled = !deploying && !installing;
             btnCancel.Enabled = !deploying && !installing;
             btnNext.Text = (n == pages.Length - 1) ? "完成" : "下一步";
             if (n == 1) RefreshEnv();

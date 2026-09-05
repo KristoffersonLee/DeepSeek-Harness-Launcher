@@ -19,7 +19,7 @@
 - **全面审查修复**（详见 docs/AUDIT-REPORT.md）：归档清理正则失效、token/PIN 明文日志、网关限速可伪造绕过、WebView2 环境复用、PIN 自定义失效、升级安装误杀 dsh web、安装窗口假死、下载容错、Node 版本/PATH 刷新等
 - **手机端修复**：subagent 注入消息不再冒充用户消息（大纲/聊天干净）；对话大纲独立分页（可加载到最早、跳转自动定位、时间正序显示）；分组名/会话标题两行完整显示
 - **运行日志 UTF-8 修复**：中文不再乱码（dsh web 与网关进程显式 UTF-8 解码）
-- **dsh 升级至 0.1.2-alpha.3**：事件/API/token 契约无变更，手机 UI 与网关零适配
+- **dsh 升级至 0.1.2-rc.1**：Session persistence API 内部变更（SessionHandle + session lock）不影响外部 JSON-RPC 契约，手机 UI 与网关零适配
 - **文档重构**：README 精简为双语主文档；升级维护手册拆分 `docs/MAINTENANCE.zh.md` / `docs/MAINTENANCE.en.md`；新增 `docs/CHANGELOG.md`
 
 ### English
@@ -35,13 +35,13 @@
 - Full audit fixes (archive purge, plaintext token/PIN logs, rate-limit bypass, WebView2 environment reuse, PIN customization, upgrade install killing dsh web, frozen installer UI, download resilience, Node version/PATH refresh, etc.)
 - Mobile fixes: subagent-injected messages no longer masquerade as user messages; paginated standalone outline (load to earliest, auto-locate on jump, chronological order); full two-line group/session titles
 - UTF-8 process-output fix (no more garbled Chinese in the log — explicit UTF-8 decoding for dsh web & gateway)
-- dsh upgraded to 0.1.2-alpha.3 (no event/API/token contract changes — mobile UI and gateway need no adaptation)
+- dsh upgraded to 0.1.2-rc.1 (Session persistence API internal change (SessionHandle + session lock) does not affect external JSON-RPC contract — mobile UI and gateway need no adaptation)
 - Docs rework: slim bilingual README; maintenance manual split into `docs/MAINTENANCE.zh.md` / `docs/MAINTENANCE.en.md`; new `docs/CHANGELOG.md`
 
 ## 兼容性 / Compatibility
 
-- dsh ≥ 0.1.1-rc.2（推荐 0.1.2-alpha.3）；Windows 10/11 64 位；WebView2 运行时（可自动部署）
-- dsh ≥ 0.1.1-rc.2 (0.1.2-alpha.3 recommended); Windows 10/11 64-bit; WebView2 Runtime (auto-deployable)
+- dsh ≥ 0.1.1-rc.2（推荐 0.1.2-rc.1）；Windows 10/11 64 位；WebView2 运行时（可自动部署）
+- dsh ≥ 0.1.1-rc.2 (0.1.2-rc.1 recommended); Windows 10/11 64-bit; WebView2 Runtime (auto-deployable)
 
 ## 资源 / Assets
 

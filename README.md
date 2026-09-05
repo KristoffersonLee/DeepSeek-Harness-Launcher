@@ -4,7 +4,7 @@
 
 A Windows desktop launcher for **DeepSeek Harness**: double-click to automatically start the dsh web service and view Harness directly in an embedded **WebView2** window — no browser needed, used like a native app.
 
-**作者 / Author: [KristoffersonLee](https://github.com/)** · **v3.0.0**
+**作者 / Author: [KristoffersonLee](https://github.com/)** · **v4.0.0**
 
 > ⚠️ **重要说明 / Important Notice**
 >
@@ -56,7 +56,7 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
 - 📝 **日志文件**：`%LOCALAPPDATA%\DSHLauncher\logs\launcher.log`（超 2MB 自动裁剪）
 - 🗂️ **托盘菜单**：打开界面 / 刷新 / 浏览器打开 / 启动 / 停止 / 新手指引 / 打开日志目录 / 设置 / 关于 / 退出
 - 🧩 **零依赖分发**：单文件安装包内嵌启动器与 WebView2 运行库，自动部署缺失环境（Node.js / dsh / WebView2 运行时）
-- 📡 **局域网共享与手机端（v3.0）**：手机/平板在同一 WiFi 下扫码即可访问；默认关闭，行为与旧版完全一致
+- 📡 **局域网共享与手机端（v4.0）**：手机/平板在同一 WiFi 下扫码即可访问；默认关闭，行为与旧版完全一致
   - 只绑定当前活跃的 WiFi/以太网**具体 IP**（绝不绑定 0.0.0.0），自动打印地址并生成二维码
   - **全新独立移动端 UI**：会话列表（按工作区分组折叠）+ 完整聊天（历史、上滑加载更早、对话大纲跳转、底部输入栏）
   - **手机端只读模式**：不能新建会话 / 切换或添加工作区（前端隐藏 + 后端 API 拦截双重保障）
@@ -65,7 +65,7 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
   - **PIN/Token 门禁**（HttpOnly Cookie，重生成 PIN 自动踢出所有设备）+ **速率限制** + 会话密钥轮换
   - 零依赖 Node 网关（内嵌资源），SSE / WebSocket 流式透传，PWA 增强（manifest / SW / 添加到主屏幕）
   - Windows 防火墙自动放行（`remoteip=localsubnet`，仅局域网）；无管理员权限时给出可复制的手动命令
-  - 开启局域网后自动为 dsh 进程设置 `OLLAMA_HOST=0.0.0.0`、`OLLAMA_ORIGINS=*`（使用 Ollama 本地推理时生效）
+  - 开启局域网后为 dsh 进程设置 `OLLAMA_HOST=0.0.0.0`、`OLLAMA_ORIGINS=*`（若使用 Ollama 本地推理，局域网内的 Harness 网关即可调用模型接口）
 
 ## 安装
 
@@ -141,7 +141,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-setup.ps1  # 构建安
 
 ## 卸载
 
-运行安装目录里的 `uninstall.cmd`（或"设置 → 应用"里卸载），会清理文件、注册表项与桌面图标；
+运行安装目录里的 `uninstall.cmd`（或"设置 → 应用"里卸载），会清理安装文件、注册表项、桌面图标、防火墙规则、局域网凭据（PIN / 令牌 / 会话密钥 / `.env`）以及运行日志与内嵌浏览器缓存（`%LOCALAPPDATA%\DSHLauncher`）；
 `%APPDATA%\DSHLauncher\settings.ini` 设置会保留，重装后不丢失。
 
 ## 目录结构
@@ -203,7 +203,7 @@ DeepSeek Harness is a web application (React frontend + Node.js service) that is
 - 📝 **Log file**: `%LOCALAPPDATA%\DSHLauncher\logs\launcher.log` (auto-trimmed beyond 2 MB)
 - 🗂️ **Tray menu**: open / refresh / open in browser / start / stop / guide / log folder / settings / about / quit
 - 🧩 **Zero-dependency distribution**: single-file installer embeds the launcher and WebView2 runtime, auto-deploys missing prerequisites (Node.js / dsh / WebView2 Runtime)
-- 📡 **LAN sharing & mobile UI (v3.0)**: phones/tablets on the same WiFi scan a QR code — OFF by default, identical to the old behavior when disabled
+- 📡 **LAN sharing & mobile UI (v4.0)**: phones/tablets on the same WiFi scan a QR code — OFF by default, identical to the old behavior when disabled
   - binds only the detected active WiFi/Ethernet **specific IP** (never 0.0.0.0), prints the address and renders a QR code
   - **brand-new standalone mobile UI**: session list grouped by workspace (collapsible) + full chat (history, load-earlier on scroll, outline navigation, bottom composer)
   - **mobile read-only mode**: no new sessions / no workspace switch or add (hidden in UI + blocked at the gateway API, double protection)
@@ -212,7 +212,7 @@ DeepSeek Harness is a web application (React frontend + Node.js service) that is
   - PIN/Token gate (HttpOnly cookie; regenerating the PIN revokes every device) + per-IP rate limiting + session-secret rotation
   - zero-dependency Node gateway (embedded resource), SSE/WebSocket passthrough, PWA (manifest/SW/add-to-homescreen)
   - auto Windows Firewall rule scoped to `remoteip=localsubnet`; copyable manual commands when elevation is missing
-  - when LAN is enabled, sets `OLLAMA_HOST=0.0.0.0` and `OLLAMA_ORIGINS=*` for the dsh process (for local Ollama inference)
+  - when LAN is enabled, sets `OLLAMA_HOST=0.0.0.0` and `OLLAMA_ORIGINS=*` for the dsh process (for local Ollama inference; allows the LAN gateway to reach the model API)
 
 ## Installation
 
@@ -288,7 +288,7 @@ Self-test (start → ready → stop end-to-end):
 
 ## Uninstall
 
-Run `uninstall.cmd` in the install directory (or uninstall via Settings → Apps); it cleans up files, the registry entry and the desktop icon.
+Run `uninstall.cmd` in the install directory (or uninstall via Settings → Apps); it cleans up the installed files, the registry entry, the desktop icon, the firewall rule, LAN credentials (PIN / token / session secret / `.env`) and the logs & embedded-browser caches under `%LOCALAPPDATA%\DSHLauncher`.
 `%APPDATA%\DSHLauncher\settings.ini` is kept, so reinstalling preserves your settings.
 
 ## Repository Structure

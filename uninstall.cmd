@@ -14,5 +14,15 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DSHLauncher
 del "%USERPROFILE%\Desktop\DSH Harness *.lnk" >nul 2>&1
 del "%USERPROFILE%\Desktop\DeepSeek Harness Launcher*.lnk" >nul 2>&1
 powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Get-ChildItem (Join-Path ([Environment]::GetFolderPath('Desktop')) '*.lnk') -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'DSH Harness *.lnk' -or $_.Name -like 'DeepSeek Harness Launcher*.lnk' } | Remove-Item -Force" >nul 2>&1
+rem 清理防火墙规则（DSHLauncher LAN * 匹配所有端口）
+netsh advfirewall firewall delete rule name="DSHLauncher LAN *" >nul 2>&1
+rem 清理 %APPDATA%\DSHLauncher\ 下的凭据与网关脚本；settings.ini 保留（重装后配置不丢失）
+del /f /q "%APPDATA%\DSHLauncher\lan-pin.txt" >nul 2>&1
+del /f /q "%APPDATA%\DSHLauncher\lan-token.txt" >nul 2>&1
+del /f /q "%APPDATA%\DSHLauncher\lan-secret.txt" >nul 2>&1
+del /f /q "%APPDATA%\DSHLauncher\.env" >nul 2>&1
+del /f /q "%APPDATA%\DSHLauncher\lan-gateway.mjs" >nul 2>&1
+rem 清理 %LOCALAPPDATA%\DSHLauncher\ 下的运行日志与内嵌浏览器缓存
+rd /s /q "%LOCALAPPDATA%\DSHLauncher" >nul 2>&1
 start "" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Start-Sleep 2; $p='%APP_DIR%'; if (-not ($p -match '^[A-Za-z]:\\?$') -and $p -ne $env:WINDIR -and $p -ne $env:USERPROFILE) { Remove-Item -LiteralPath $p -Recurse -Force }"
 exit
