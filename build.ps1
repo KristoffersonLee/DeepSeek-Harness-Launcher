@@ -42,8 +42,14 @@ if ($LASTEXITCODE -ne 0) { throw "编译失败 (csc exit code $LASTEXITCODE)" }
 
 # ---------- 5. 拷贝 WebView2 运行所需 DLL 到 exe 旁 ----------
 Write-Host "拷贝 WebView2 运行库 ..."
-Copy-Item "$here\lib\Microsoft.Web.WebView2.Core.dll" "$here\" -Force
-Copy-Item "$here\lib\Microsoft.Web.WebView2.WinForms.dll" "$here\" -Force
-Copy-Item "$here\lib\WebView2Loader.dll" "$here\" -Force
+$dlls = @(
+    "$here\lib\Microsoft.Web.WebView2.Core.dll",
+    "$here\lib\Microsoft.Web.WebView2.WinForms.dll",
+    "$here\lib\WebView2Loader.dll"
+)
+foreach ($dll in $dlls) {
+    if (-not (Test-Path $dll)) { throw "缺少 WebView2 运行库: $dll`n请先确保 lib\ 目录包含 WebView2 SDK DLL（MIT 许可）" }
+    Copy-Item $dll "$here\" -Force
+}
 
 Write-Host "构建完成: $here\DSHLauncher.exe"

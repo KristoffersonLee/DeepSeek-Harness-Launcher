@@ -194,11 +194,17 @@ namespace DSHSetup
                     @"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
                     "pv", null);
                 if (v != null && v.ToString().Length > 0) return true;
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                    "Microsoft", "EdgeWebView", "Application");
-                if (Directory.Exists(dir))
+                // 优先检查 ProgramFilesX86（64 位系统标准位置），回退 ProgramFiles（32 位系统 / 特殊安装）
+                string[] dirs = new string[]
                 {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                        "Microsoft", "EdgeWebView", "Application"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        "Microsoft", "EdgeWebView", "Application")
+                };
+                foreach (string dir in dirs)
+                {
+                    if (!Directory.Exists(dir)) continue;
                     // msedgewebview2.exe 位于各版本子目录根：只扫一层，
                     // 避免 AllDirectories 递归遍历整个运行时目录（数十万文件）拖慢检测
                     string exe = Path.Combine(dir, "msedgewebview2.exe");
@@ -284,6 +290,9 @@ namespace DSHSetup
         // 当前 CPU 架构对应的 Node.js MSI 后缀（x64 / arm64）
         private static string NodeMsiArch()
         {
+            // Environment.Is64BitOperatingSystem 反映 OS 位数（.NET 4.0+ 可用），
+            // 避免 PROCESSOR_ARCHITECTURE 返回当前进程位数（32 位进程在 64 位系统上返回 x86）
+            if (!Environment.Is64BitOperatingSystem) return "x86";
             string arch = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE");
             if (arch != null && arch.ToLowerInvariant() == "arm64") return "arm64";
             return "x64";
@@ -434,6 +443,7 @@ namespace DSHSetup
                 if (!DownloadFileWithRetry("https://go.microsoft.com/fwlink/p/?LinkId=2124703", boot, log, 512 * 1024))
                 {
                     log("WebView2 引导程序下载失败，请检查网络后重试。");
+                    try { File.Delete(boot); } catch { }
                     return false;
                 }
                 log("正在静默安装（可能弹出 UAC 授权，请允许）…");
@@ -477,22 +487,13 @@ namespace DSHSetup
                 if (workDir.Length > 0) psi.WorkingDirectory = workDir;
                 using (Process p = Process.Start(psi))
                 {
-                    StringBuilder buf = new StringBuilder();
                     p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e)
                     {
-                        if (e.Data != null)
-                        {
-                            lock (buf) { buf.AppendLine(e.Data); }
-                            if (log != null) log(e.Data);
-                        }
+                        if (e.Data != null && log != null) log(e.Data);
                     };
                     p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e)
                     {
-                        if (e.Data != null)
-                        {
-                            lock (buf) { buf.AppendLine(e.Data); }
-                            if (log != null) log("[err] " + e.Data);
-                        }
+                        if (e.Data != null && log != null) log("[err] " + e.Data);
                     };
                     p.BeginOutputReadLine();
                     p.BeginErrorReadLine();
@@ -509,6 +510,7 @@ namespace DSHSetup
                         }
                         catch { }
                         try { p.Kill(); } catch { }
+                        try { p.Dispose(); } catch { }
                         if (log != null) log("进程超时，已强制终止。");
                         return -1;
                     }
@@ -675,7 +677,6 @@ namespace DSHSetup
             catch { }
         }
 
-        // 原子解压：先写 .tmp 再覆盖，中途失败（磁盘满/占用）不会留下半截损坏文件
         // 原子解压：先写 .tmp 再原子替换目标（File.Replace 同卷原子），
         // 中途失败（磁盘满/占用）不会留下半截文件；失败路径清理 .tmp
         private static void ExtractResource(string name, string outPath)
@@ -714,8 +715,10 @@ namespace DSHSetup
             // 无 BOM 写入（内容纯 ASCII）：cmd.exe 不识别 UTF-8 BOM，
             // 带 BOM 时首行会被解析为“ï»¿@echo off”报错且 @echo off 失效
             string p = dir.TrimEnd('\\');
-            // 转义：单引号（PowerShell 字符串）、% （cmd 变量符，批处理中需写成 %%）
-            string psEscape = p.Replace("'", "''").Replace("%", "%%");
+            // 转义：单引号（PowerShell 单引号字符串中，单引号需双写转义）。
+            // 注意：路径用于 PowerShell 单引号字符串，% 在单引号中不是特殊字符，无需转义；
+            // 批处理中的 %% 仅用于 cmd 变量符，此处路径已脱离 cmd 上下文。
+            string psEscape = p.Replace("'", "''");
             string bat =
                 "@echo off\r\n" +
                 "chcp 65001 >nul\r\n" +
@@ -730,8 +733,8 @@ namespace DSHSetup
                 "del \"%USERPROFILE%\\Desktop\\DeepSeek Harness Launcher*.lnk\" >nul 2>&1\r\n" +
                 // 兼容 OneDrive 重定向的桌面（新旧两种快捷方式名都清掉）
                 "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"Get-ChildItem (Join-Path ([Environment]::GetFolderPath('Desktop')) '*.lnk') -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'DSH Harness *.lnk' -or $_.Name -like 'DeepSeek Harness Launcher*.lnk' } | Remove-Item -Force\" >nul 2>&1\r\n" +
-                // 清理防火墙规则（DSHLauncher LAN * 匹配所有端口）
-                "netsh advfirewall firewall delete rule name=\"DSHLauncher LAN *\" >nul 2>&1\r\n" +
+                // 清理防火墙规则（DSHLauncher LAN * 匹配所有端口；netsh delete rule name= 不支持通配符，改用 PowerShell）
+                "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"Get-NetFirewallRule -Name 'DSHLauncher LAN *' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\" >nul 2>&1\r\n" +
                 // 清理 %APPDATA%\DSHLauncher\ 下的凭据与网关脚本；
                 // settings.ini 保留（与 README 卸载说明一致：重装后配置不丢失）
                 "del /f /q \"%APPDATA%\\DSHLauncher\\lan-pin.txt\" >nul 2>&1\r\n" +
@@ -1289,11 +1292,13 @@ namespace DSHSetup
         {
             if (!installDone) { Close(); return; } // 安装失败时不启动、不创建快捷方式
             string exe = Path.Combine(installDir, "DSHLauncher.exe");
+            // 同时勾选"打开新手指引"和"立即启动"时：先以 --guide 启动（指引窗口含启动器功能），
+            // 再额外启动一个普通实例，确保用户关闭指引后仍有运行中的启动器
             if (chkGuide.Checked)
             {
                 try { Process.Start(exe, "--guide"); } catch { }
             }
-            else if (chkLaunch.Checked)
+            if (chkLaunch.Checked)
             {
                 try { Process.Start(exe); } catch { }
             }

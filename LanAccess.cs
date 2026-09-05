@@ -148,6 +148,9 @@ namespace DSHLauncher
         // PIN / Token 解析：环境变量 DSH_LAN_PIN → 启动器目录 .env → %APPDATA%.env
         // → 自动生成并持久化到 lan-pin.txt（禁止硬编码）
         // ---------------------------------------------------------------------
+        // 注意：AppDataDir 使用 ApplicationData（漫游配置文件）。域环境下 PIN/Token/Secret
+        // 文件会同步到其他机器，但 PIN 仅在本地网关有效，实际风险可控。
+        // 如需更高安全性，可迁移到 LocalApplicationData（需处理现有安装的迁移）。
         public static string AppDataDir
         {
             get
@@ -442,25 +445,12 @@ namespace DSHLauncher
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 // netsh 管道输出为 UTF-8：不设置编码会按 ANSI/GBK 解码，中文（如“已启用”）变乱码导致匹配失败
-                psi.StandardOutputEncoding = Encoding.UTF8;
-                psi.StandardErrorEncoding = Encoding.UTF8;
-                if (elevated)
-                {
-                    // 提权需要 ShellExecute（触发 UAC）
-                    psi.UseShellExecute = true;
-                    psi.Verb = "runas";
-                    psi.CreateNoWindow = false;
-                    psi.RedirectStandardOutput = false;
-                    psi.RedirectStandardError = false;
-                }
+                psi.StandardOutputEncoding = Encoding.Default;
+                psi.StandardErrorEncoding = Encoding.Default;
+                // elevated 分支已移除：所有调用方均传 elevated=false，
+                // 提权操作由 TryAddRuleElevated 通过独立 PowerShell 脚本完成
                 using (Process p = Process.Start(psi))
                 {
-                    if (elevated)
-                    {
-                        p.WaitForExit(30000);
-                        exitCode = p.ExitCode;
-                        return "";
-                    }
                     outp.Append(p.StandardOutput.ReadToEnd());
                     outp.Append(p.StandardError.ReadToEnd());
                     p.WaitForExit(15000);
@@ -565,7 +555,8 @@ namespace DSHLauncher
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = "powershell.exe";
-                psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"";
+                // 使用单引号包裹路径，防止用户名含 $() 等 PowerShell 特殊字符时被解释为脚本块
+                psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File '" + script.Replace("'", "''") + "'";
                 psi.UseShellExecute = true;
                 psi.Verb = "runas"; // 触发 UAC，提升为新进程
                 Process p = Process.Start(psi);

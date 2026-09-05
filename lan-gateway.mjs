@@ -179,20 +179,30 @@ function extractAuthCookie(setCookieHeaders) {
   return '';
 }
 let lastExchangeAttempt = 0;
-let exchanging = false; // 并发保护：防止多个请求同时触发兑换
+let exchangePromise = null; // 共享 Promise：并发调用方等待同一次兑换，避免重复请求
 async function exchangeToken() {
   const nowMs = Date.now();
-  if (exchanging) return false; // 已有兑换在进行中，跳过
+  // 如果有正在进行的兑换，直接复用其 Promise（单飞模式）
+  if (exchangePromise) return exchangePromise;
   if (nowMs - lastExchangeAttempt < 10000) return false; // 失败退避：10 秒内不重复尝试
-  exchanging = true;
   lastExchangeAttempt = nowMs;
+  exchangePromise = doExchange();
   try {
+    return await exchangePromise;
+  } finally {
+    exchangePromise = null;
+  }
+}
+async function doExchange() {
     const token = readToken();
     if (!token) return false;
     const base = TARGET.endsWith('/') ? TARGET.slice(0, -1) : TARGET;
-    const res = await fetch(base + '/?token=' + encodeURIComponent(token), {
+    // Token 通过自定义 Header 发送，避免出现在 URL/服务器日志/浏览器历史中
+    const res = await fetch(base + '/', {
+      method: 'GET',
       redirect: 'manual',
-      signal: AbortSignal.timeout(10000) // 目标挂起时 10 秒超时，避免兑换流程永久阻塞
+      signal: AbortSignal.timeout(10000),
+      headers: { 'X-DSH-Token': token }
     });
     const sc = typeof res.headers.getSetCookie === 'function'
       ? res.headers.getSetCookie()
@@ -201,7 +211,6 @@ async function exchangeToken() {
     if (c) { dshCookie = c; log('dsh 令牌兑换成功（进程 Cookie 已就绪）'); return true; }
     log('令牌兑换未获得 Cookie（HTTP ' + res.status + '）');
   } catch (e) { log('令牌兑换失败: ' + e.message); }
-  finally { exchanging = false; }
   return false;
 }
 async function ensureDshCookie() {
@@ -823,15 +832,16 @@ function doProxy(req, res, body, retried, onJson) {
     method: req.method, path: req.url, headers, setHost: false,
     timeout: UPSTREAM_TIMEOUT_MS
   });
+  let responded = false;
   const destroyUpstream = () => { try { proxy.destroy(); } catch { /* ignore */ } };
+  const sendError = (code, msg) => { if (responded) return; responded = true; try { noCacheHtml(res, code, statusPage(code, msg)); } catch { /* ignore */ } };
   // 客户端断连 → 销毁上游请求，避免 dsh 继续执行（如 LLM 生成空转、SSE 悬挂）
   req.on('aborted', destroyUpstream);
   res.on('close', () => { if (!res.writableEnded) destroyUpstream(); });
-  proxy.on('timeout', destroyUpstream);
-  proxy.on('error', (e) => {
-    try { noCacheHtml(res, 502, statusPage(502, 'Harness 服务未运行或暂不可用')); } catch { /* ignore */ }
-  });
+  proxy.on('timeout', () => { destroyUpstream(); sendError(504, 'Harness 服务响应超时'); });
+  proxy.on('error', (e) => { sendError(502, 'Harness 服务未运行或暂不可用'); });
   proxy.on('response', (pres) => {
+    if (responded) return; // 已发送错误响应（如超时），忽略上游响应
     // dsh 令牌过期（401）且未重试：此刻尚未向客户端写出任何字节，响应通道是干净的——
     // 不能 res.destroy()（会掐断手机连接，重试响应永远到不了客户端）。
     // 保持原 res，重新兑换令牌后在同一通道上重发一次（body 可重放）。
@@ -840,7 +850,7 @@ function doProxy(req, res, body, retried, onJson) {
       log('目标返回 401，重新兑换 dsh 令牌后重试…');
       exchangeToken().then(() => {
         if (dshCookie) doProxy(req, res, body, true, onJson);
-        else { try { noCacheHtml(res, 502, statusPage(502, 'Harness 认证失败，请重新开启局域网共享')); } catch { /* ignore */ } }
+        else { sendError(502, 'Harness 认证失败，请重新开启局域网共享'); }
       });
       return;
     }
@@ -854,6 +864,8 @@ function doProxy(req, res, body, retried, onJson) {
       const hc = [];
       pres.on('data', (ch) => hc.push(ch));
       pres.on('end', () => {
+        if (responded) return;
+        responded = true;
         let buf = Buffer.concat(hc).toString('utf8');
         if (onJson) { try { const out = onJson(buf, pres); if (out != null) buf = out; } catch { /* keep original */ } }
         if (ct.includes('text/html')) buf = injectPwa(buf);
@@ -868,6 +880,7 @@ function doProxy(req, res, body, retried, onJson) {
     }
     const sh = { ...pres.headers };
     delete sh['set-cookie']; // 不透传目标认证 cookie 到手机浏览器
+    responded = true;
     res.writeHead(pres.statusCode || 200, sh);
     pres.pipe(res);
   });
@@ -937,6 +950,8 @@ function proxyUpgrade(req, socket, head) {
   });
   proxy.on('timeout', () => {
     try { proxy.destroy(); } catch { /* ignore */ }
+    try { socket.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'); } catch { /* ignore */ }
+    try { socket.destroy(); } catch { /* ignore */ }
   });
   // 目标对 upgrade 返回普通 HTTP 响应（如 401/500）时：把响应转发给客户端后关闭，
   // 避免客户端 socket 永久挂起（原实现无 'response' 监听）
@@ -964,7 +979,8 @@ function proxyUpgrade(req, socket, head) {
     headText += '\r\n';
     try {
       socket.write(headText);
-      if (phead && phead.length) psocket.unshift(phead);
+      // 转发客户端在 upgrade 请求头之后立即发送的数据（RFC 6455 允许），避免数据丢失
+      if (phead && phead.length) psocket.write(phead);
       socket.pipe(psocket);
       psocket.pipe(socket);
       psocket.on('error', () => { try { socket.destroy(); } catch { /* ignore */ } });
@@ -1062,8 +1078,8 @@ const server = http.createServer((req, res) => {
     sendJson(res, 404, { error: 'not_found' });
     return;
   }
-  // ---- 手机端：访问首页自动进入全新移动 UI（/__lan/m）；embed=1 用于打开会话聊天 ----
-  if (url === '/' && isMobileRequest(req) && req.url.indexOf('embed') < 0) {
+  // ---- 手机端：访问首页自动进入全新移动 UI（/__lan/m） ----
+  if (url === '/' && isMobileRequest(req)) {
     res.writeHead(302, { location: '/__lan/m', 'cache-control': 'no-store' });
     res.end();
     return;
@@ -1089,7 +1105,9 @@ server.on('upgrade', (req, socket, head) => {
     try { socket.destroy(); } catch { /* ignore */ }
     return;
   }
-  ensureDshCookie().then(() => proxyUpgrade(req, socket, head));
+  ensureDshCookie().then(() => proxyUpgrade(req, socket, head)).catch(() => {
+    try { socket.write('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n'); socket.destroy(); } catch { /* ignore */ }
+  });
 });
 
 server.on('error', (e) => {

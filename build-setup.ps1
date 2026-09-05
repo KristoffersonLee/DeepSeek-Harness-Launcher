@@ -7,12 +7,9 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
 
-# ---------- 1. 构建启动器 ----------
+# ---------- 2. 构建启动器（build.ps1 第 10 行已无条件调用 make-icon.ps1 生成 app.ico） ----------
 & "$here\build.ps1"
 if ($LASTEXITCODE -ne 0) { throw "启动器构建失败" }
-
-# ---------- 2. 生成 app.ico（确保存在） ----------
-if (-not (Test-Path "$here\app.ico")) { & "$here\make-icon.ps1" }
 
 # ---------- 3. 定位 csc ----------
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"

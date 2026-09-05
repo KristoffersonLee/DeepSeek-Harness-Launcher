@@ -376,8 +376,31 @@ namespace DSHLauncher
             }
         }
 
-        // 通过 netstat 找到监听指定端口的 PID
+        // 通过 IPGlobalProperties 找到监听指定端口的 PID（比 netstat 更快更稳定）
         public static int FindPidOnPort(int port)
+        {
+            try
+            {
+                // 方法1: IPGetActiveTcpListeners + 进程匹配（.NET 内置，无需启动子进程）
+                var properties = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties();
+                foreach (var listener in properties.GetActiveTcpListeners())
+                {
+                    if (listener.Port == port)
+                    {
+                        // 找到匹配的端口，通过 WMI 获取 PID（比 netstat 更可靠）
+                        return FindPidOnPortByNetstat(port);
+                    }
+                }
+                return 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        // 通过 netstat 找到监听指定端口的 PID（兜底方法）
+        private static int FindPidOnPortByNetstat(int port)
         {
             try
             {
@@ -2451,64 +2474,249 @@ namespace DSHLauncher
     }
 
     // ---------------------------------------------------------------------
-    // 设置窗口（替代原启动器面板；从内嵌窗口菜单/托盘打开）
+    // 设置窗口（Tab 四页：常规 / 局域网共享 / dsh 升级 / 帮助）
+    // 布局原则：Tab 分区替代单屏平铺，消除死空间与断层；运行日志弹性填充；
+    //           防火墙手动命令默认折叠、自动配置失败时自动展开并标红；
+    //           状态标签 AutoEllipsis；行距 ≥30px 吸收字体度量差异防重叠
     // ---------------------------------------------------------------------
     internal class SettingsForm : Form
     {
         private LauncherForm host;
-        private TextBox txtPort, txtWork, txtLanPort, txtLanPin;
-        private Button btnBrowseWork, btnSave, btnGenPin, btnFwElevated, btnCopyCmd, btnCopyUrl, btnOpenLan;
-        private CheckBox chkTray, chkLan;
-        private Label lblLanStatus, lblPinSrc, lblFwStatus, lblOllama;
-        private TextBox txtLanUrl, txtManual;
-        private TextBox txtLog;
-        private Button btnDoc, btnLogDir, btnAbout, btnClose, btnCleanArch;
-        // dsh 升级
-        private GroupBox grpUpgrade;
-        private Label lblDshVer, lblDshLatest, lblUpgradeStatus;
+        private ToolTip tips;
+
+        private TabControl tabs;
+        private TabPage tabGeneral, tabLan, tabUpgrade, tabHelp;
+        private const int UpgradeTabIndex = 2;
+
+        // 常规页
+        private GroupBox grpService, grpLog;
+        private TextBox txtPort, txtWork, txtLog;
+        private Label lblPortError;
+        private CheckBox chkTray;
+        private Button btnBrowseWork, btnSave;
+
+        // 局域网页
+        private GroupBox grpLan;
+        private CheckBox chkLan;
+        private TextBox txtLanPort, txtLanPin, txtLanUrl;
+        private Label lblLanStatus, lblPinSrc, lblPinHint, lblFwStatus, lblOllama;
+        private Button btnGenPin, btnFwElevated, btnCopyUrl, btnOpenLan;
+        private LinkLabel lnkManual;
+        private Panel panManual;
+        private TextBox txtManual;
+        private Button btnCopyCmd;
+        private WebView2 lanQr;
+        private bool qrReady = false;
+        private string qrShownUrl = "";
+        private bool qrInitStarted = false;
+        private bool manualExpanded = false;
+        private bool lanUiUpdating = false;   // 防止程序化设置 chkLan.Checked 触发递归提交
+
+        // 升级页
+        private GroupBox grpUp;
+        private Label lblDshVer, lblDshLatest, lblUpgradeStatus, lblUpgradeHint;
         private Button btnCheckUpgrade, btnUpgradeDsh;
         private ProgressBar progUpgrade;
         private string latestDshVersion = "";
         private bool upgrading = false;
-        private WebView2 lanQr;                 // 二维码（qrcode.js 渲染到 canvas）
-        private bool qrReady = false;
-        private string qrShownUrl = "";
+
+        // 帮助页
+        private GroupBox grpAbout, grpQuick;
+        private Label lblAboutTitle, lblAboutDesc;
+        private Button btnDoc, btnLogDir, btnCleanArch, btnAbout, btnClose;
+
         private System.Windows.Forms.Timer refreshTimer;
+        private bool layoutDone = false;
 
         public SettingsForm(LauncherForm host)
         {
             this.host = host;
             this.ShowInTaskbar = false;
             this.Text = Program.AppName + " 设置";
-            this.ClientSize = new Size(1000, 780);
-            this.MinimumSize = new Size(980, 720);
+            this.ClientSize = new Size(900, 600);
+            this.MinimumSize = new Size(840, 560);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Microsoft YaHei UI", 9f);
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            // ==================== 左列 ====================
-            // 端口
+            tips = new ToolTip();
+
+            tabs = new TabControl();
+            tabs.Dock = DockStyle.Fill;
+            tabGeneral = new TabPage("常规");
+            tabLan = new TabPage("局域网共享");
+            tabUpgrade = new TabPage("dsh 升级");
+            tabHelp = new TabPage("帮助");
+            tabs.TabPages.Add(tabGeneral);
+            tabs.TabPages.Add(tabLan);
+            tabs.TabPages.Add(tabUpgrade);
+            tabs.TabPages.Add(tabHelp);
+            // 升级进行中锁定页切换，避免后台升级、界面切走造成脱管
+            tabs.Selecting += delegate(object s, TabControlCancelEventArgs e)
+            {
+                if (upgrading && e.TabPageIndex != UpgradeTabIndex) e.Cancel = true;
+            };
+            tabs.SelectedIndexChanged += delegate(object s, EventArgs e)
+            {
+                if (tabs.SelectedTab == tabLan) { EnsureQrInit(); RefreshLanPanel(); }
+                if (tabs.SelectedTab == tabUpgrade && lblDshVer.Text.Contains("检测中"))
+                {
+                    CheckCurrentVersion();
+                }
+            };
+            this.Controls.Add(tabs);
+            this.PerformLayout();
+
+            BuildGeneralPage();
+            BuildLanPage();
+            BuildUpgradePage();
+            BuildHelpPage();
+            LayoutAll();
+
+            // 日志实时显示
+            host.LogLine += OnLogLine;
+            this.FormClosed += delegate
+            {
+                try { host.LogLine -= OnLogLine; } catch { }
+                try { if (refreshTimer != null) refreshTimer.Stop(); } catch { }
+                try { tips.Dispose(); } catch { }
+            };
+
+            refreshTimer = new System.Windows.Forms.Timer();
+            refreshTimer.Interval = 1500;
+            refreshTimer.Tick += delegate
+            {
+                // 仅局域网页可见时刷新；RefreshLanPanel 内部按“内容变化才重写”消除闪烁
+                if (tabs.SelectedTab == tabLan) RefreshLanPanel();
+            };
+            refreshTimer.Start();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            // 页面尺寸此刻才最终确定，重算一次绑定几何（幂等，带锚点的首次校准）
+            if (!layoutDone) LayoutAll();
+        }
+
+        // ========================= 布局 =========================
+        // 所有坐标统一在此计算（基于运行时页面实际尺寸），Build* 只负责创建与接线
+        private void LayoutAll()
+        {
+            int pw = tabGeneral.ClientSize.Width;
+            int ph = tabGeneral.ClientSize.Height;
+            if (pw < 400 || ph < 300) return;
+
+            // ---------------- 常规 ----------------
+            grpService.SetBounds(12, 10, pw - 24, 132);
+            grpService.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            int gw = grpService.ClientSize.Width;
+            txtPort.SetBounds(64, 28, 80, 26);
+            lblPortError.SetBounds(152, 31, gw - 168, 20);
+            lblPortError.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            txtWork.SetBounds(80, 60, gw - 80 - 16 - 96 - 8, 26);
+            txtWork.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            btnBrowseWork.SetBounds(gw - 16 - 96, 59, 96, 26);
+            btnBrowseWork.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnSave.SetBounds(gw - 16 - 96, 92, 96, 30);
+            btnSave.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            grpLog.SetBounds(12, 150, pw - 24, ph - 162);
+            grpLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            txtLog.SetBounds(12, 22, grpLog.ClientSize.Width - 24, grpLog.ClientSize.Height - 34);
+            txtLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+
+            // ---------------- 局域网 ----------------
+            grpLan.SetBounds(12, 10, pw - 24, ph - 20);
+            grpLan.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            int lw = grpLan.ClientSize.Width;
+            int lh = grpLan.ClientSize.Height;
+            lblLanStatus.SetBounds(140, 59, lw - 156, 20);
+            lblLanStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            btnOpenLan.SetBounds(lw - 16 - 72, 89, 72, 26);
+            btnOpenLan.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnCopyUrl.SetBounds(lw - 16 - 72 - 8 - 76, 89, 76, 26);
+            btnCopyUrl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            txtLanUrl.SetBounds(16, 90, lw - 16 - (72 + 8 + 76 + 8) - 16, 26);
+            txtLanUrl.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblPinSrc.SetBounds(260, 182, lw - 276, 20);
+            lblPinSrc.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblPinHint.SetBounds(260, 204, lw - 276, 34);
+            lblPinHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblFwStatus.SetBounds(318, 246, lw - 334, 20);
+            lblFwStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            btnFwElevated.SetBounds(260, 270, lw - 276, 26);
+            btnFwElevated.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblOllama.SetBounds(260, 304, lw - 276, 40);
+            lblOllama.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+            // 折叠的手动命令区（锚定底部，展开时上移）
+            panManual.SetBounds(16, lh - 12 - 88, lw - 32, 88);
+            panManual.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            txtManual.SetBounds(0, 2, panManual.ClientSize.Width - 120 - 8, 56);
+            txtManual.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            btnCopyCmd.SetBounds(panManual.ClientSize.Width - 112, 16, 112, 28);
+            btnCopyCmd.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            RelayoutManualLink();
+
+            // ---------------- 升级 ----------------
+            grpUp.SetBounds(12, 10, pw - 24, 204);
+            grpUp.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            int uw = grpUp.ClientSize.Width;
+            progUpgrade.SetBounds(16, 98, uw - 32, 22);
+            progUpgrade.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblUpgradeStatus.SetBounds(16, 128, uw - 32, 20);
+            lblUpgradeStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblUpgradeHint.SetBounds(16, 156, uw - 32, 36);
+            lblUpgradeHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+            // ---------------- 帮助 ----------------
+            grpAbout.SetBounds(12, 10, pw - 24, 104);
+            grpAbout.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            int aw = grpAbout.ClientSize.Width;
+            lblAboutTitle.SetBounds(16, 24, aw - 32, 24);
+            lblAboutTitle.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            lblAboutDesc.SetBounds(16, 52, aw - 32, 40);
+            lblAboutDesc.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            grpQuick.SetBounds(12, 122, pw - 24, 108);
+            grpQuick.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            btnClose.SetBounds(pw - 12 - 96, ph - 12 - 32, 96, 30);
+            btnClose.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+
+            layoutDone = true;
+        }
+
+        // ========================= 构建 =========================
+        private void BuildGeneralPage()
+        {
+            grpService = new GroupBox();
+            grpService.Text = "服务";
+
             Label lPort = new Label();
-            lPort.SetBounds(16, 20, 48, 24);
+            lPort.SetBounds(16, 32, 44, 22);
             lPort.Text = "端口:";
             lPort.TextAlign = ContentAlignment.MiddleLeft;
 
             txtPort = new TextBox();
-            txtPort.SetBounds(64, 20, 70, 26);
             txtPort.Text = host.UiPortText;
+            tips.SetToolTip(txtPort, "1–65535；修改保存后服务自动以新端口重启");
 
-            // 工作目录
+            lblPortError = new Label();
+            lblPortError.ForeColor = Color.Firebrick;
+            lblPortError.Font = new Font("Microsoft YaHei UI", 8.5f);
+            lblPortError.Visible = false;
+            lblPortError.TextAlign = ContentAlignment.MiddleLeft;
+
             Label lWork = new Label();
-            lWork.SetBounds(16, 56, 66, 24);
+            lWork.SetBounds(16, 64, 60, 22);
             lWork.Text = "工作目录:";
             lWork.TextAlign = ContentAlignment.MiddleLeft;
+            tips.SetToolTip(lWork, "dsh 读写文件、保存会话的范围；修改保存后服务自动重启");
 
             txtWork = new TextBox();
-            txtWork.SetBounds(82, 56, 280, 26);
             txtWork.Text = host.UiWorkDir;
 
             btnBrowseWork = new Button();
-            btnBrowseWork.SetBounds(368, 56, 92, 26);
             btnBrowseWork.Text = "浏览…";
             btnBrowseWork.Click += delegate
             {
@@ -2518,30 +2726,34 @@ namespace DSHLauncher
                 if (dlg.ShowDialog(this) == DialogResult.OK) txtWork.Text = dlg.SelectedPath;
             };
 
-            // 行为选项
             chkTray = new CheckBox();
-            chkTray.SetBounds(16, 96, 190, 22);
+            chkTray.SetBounds(16, 94, 220, 24);
             chkTray.Text = "关闭时最小化到托盘";
             chkTray.Checked = host.UiTray;
 
             btnSave = new Button();
-            btnSave.SetBounds(368, 92, 96, 30);
-            btnSave.Text = "保存设置";
-            btnSave.Click += delegate
-            {
-                host.CommitSettings(txtPort.Text.Trim(), txtWork.Text.Trim(), chkTray.Checked);
-                txtPort.Text = host.UiPortText;
-                txtWork.Text = host.UiWorkDir;
-                RefreshLanPanel();
-            };
+            btnSave.Text = "已保存";
+            btnSave.Enabled = false;
+            btnSave.Click += OnSaveClick;
 
-            // 运行日志
-            Label lLog = new Label();
-            lLog.SetBounds(16, 134, 100, 20);
-            lLog.Text = "运行日志:";
+            txtPort.TextChanged += delegate { HidePortErrorIfValid(); UpdateSaveState(); };
+            txtWork.TextChanged += delegate { UpdateSaveState(); };
+            chkTray.CheckedChanged += delegate { UpdateSaveState(); };
+
+            grpService.Controls.Add(lPort);
+            grpService.Controls.Add(txtPort);
+            grpService.Controls.Add(lblPortError);
+            grpService.Controls.Add(lWork);
+            grpService.Controls.Add(txtWork);
+            grpService.Controls.Add(btnBrowseWork);
+            grpService.Controls.Add(chkTray);
+            grpService.Controls.Add(btnSave);
+            tabGeneral.Controls.Add(grpService);
+
+            grpLog = new GroupBox();
+            grpLog.Text = "运行日志";
 
             txtLog = new TextBox();
-            txtLog.SetBounds(16, 156, 444, 200);
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Both;
@@ -2555,65 +2767,62 @@ namespace DSHLauncher
             logMenu.Items.Add("清空日志", null, delegate { txtLog.Clear(); });
             logMenu.Items.Add("复制全部", null, delegate { if (txtLog.TextLength > 0) Clipboard.SetText(txtLog.Text); });
             txtLog.ContextMenuStrip = logMenu;
+            grpLog.Controls.Add(txtLog);
+            tabGeneral.Controls.Add(grpLog);
+        }
 
-            // ==================== 右列：局域网共享 ====================
-            Panel pLan = new Panel();
-            pLan.SetBounds(472, 12, 540, 380);
-            pLan.BorderStyle = BorderStyle.FixedSingle;
-            pLan.BackColor = Color.FromArgb(252, 252, 252);
+        private void BuildLanPage()
+        {
+            grpLan = new GroupBox();
+            grpLan.Text = "局域网共享（默认关闭）";
 
-            // 第1行：开关
             chkLan = new CheckBox();
-            chkLan.SetBounds(12, 8, 320, 20);
-            chkLan.Text = "允许局域网访问（默认关闭）";
+            chkLan.SetBounds(16, 26, 320, 24);
+            chkLan.Text = "允许局域网访问";
             chkLan.Checked = host.UiLanEnabled;
 
-            // 第2行：端口
             Label lLanPort = new Label();
-            lLanPort.SetBounds(12, 32, 44, 22);
+            lLanPort.SetBounds(16, 60, 44, 22);
             lLanPort.Text = "端口:";
             lLanPort.TextAlign = ContentAlignment.MiddleLeft;
 
             txtLanPort = new TextBox();
-            txtLanPort.SetBounds(56, 32, 58, 26);
+            txtLanPort.SetBounds(64, 56, 64, 26);
             txtLanPort.Text = host.UiLanPortText;
+            tips.SetToolTip(txtLanPort, "手机访问所用端口；不能与 Harness 端口相同");
 
             lblLanStatus = new Label();
-            lblLanStatus.SetBounds(124, 32, 400, 22);
             lblLanStatus.ForeColor = Color.FromArgb(70, 70, 70);
+            lblLanStatus.AutoEllipsis = true;
+            lblLanStatus.TextAlign = ContentAlignment.MiddleLeft;
 
-            // 第3行：URL + 按钮
             txtLanUrl = new TextBox();
-            txtLanUrl.SetBounds(12, 62, 360, 26);
             txtLanUrl.ReadOnly = true;
             txtLanUrl.BackColor = Color.White;
+            tips.SetToolTip(txtLanUrl, "手机浏览器访问的地址（不含 PIN）");
 
             btnCopyUrl = new Button();
-            btnCopyUrl.SetBounds(380, 62, 68, 26);
             btnCopyUrl.Text = "复制";
-            btnCopyUrl.Click += delegate { Clipboard.SetText(txtLanUrl.Text); };
+            btnCopyUrl.Click += delegate { if (txtLanUrl.Text.Length > 0) Clipboard.SetText(txtLanUrl.Text); };
 
             btnOpenLan = new Button();
-            btnOpenLan.SetBounds(456, 62, 72, 26);
             btnOpenLan.Text = "打开";
             btnOpenLan.Click += delegate { host.OpenLanInBrowser(); };
 
-            // 第4-6行：二维码(左) + PIN/防火墙(右)
             lanQr = new WebView2();
-            lanQr.SetBounds(12, 96, 220, 220);
+            lanQr.SetBounds(16, 128, 220, 220);
             lanQr.DefaultBackgroundColor = Color.White;
 
-            // PIN
             Label lblPin = new Label();
-            lblPin.SetBounds(244, 96, 160, 18);
+            lblPin.SetBounds(260, 128, 140, 20);
             lblPin.Text = "访问密码 (PIN):";
 
             txtLanPin = new TextBox();
-            txtLanPin.SetBounds(244, 116, 120, 24);
+            txtLanPin.SetBounds(260, 150, 120, 26);
             txtLanPin.UseSystemPasswordChar = true;
 
             btnGenPin = new Button();
-            btnGenPin.SetBounds(370, 116, 120, 24);
+            btnGenPin.SetBounds(388, 150, 110, 26);
             btnGenPin.Text = "重新生成";
             btnGenPin.Click += delegate
             {
@@ -2625,28 +2834,27 @@ namespace DSHLauncher
             };
 
             lblPinSrc = new Label();
-            lblPinSrc.SetBounds(244, 144, 280, 16);
             lblPinSrc.ForeColor = Color.Gray;
             lblPinSrc.Font = new Font("Microsoft YaHei UI", 8.5f);
+            lblPinSrc.AutoEllipsis = true;
+            tips.SetToolTip(lblPinSrc, "当前生效 PIN 的来源（环境变量 / .env / 自动生成）");
 
-            Label lblPinHint = new Label();
-            lblPinHint.SetBounds(244, 160, 280, 32);
-            lblPinHint.Text = "留空 = 自动生成；也可在 .env 中配置 DSH_LAN_PIN。";
+            lblPinHint = new Label();
             lblPinHint.ForeColor = Color.Gray;
             lblPinHint.Font = new Font("Microsoft YaHei UI", 8.5f);
+            lblPinHint.Text = "留空 = 自动生成；也可在 .env 中配置 DSH_LAN_PIN。";
 
-            // 防火墙
             Label lblFwTitle = new Label();
-            lblFwTitle.SetBounds(244, 196, 56, 18);
+            lblFwTitle.SetBounds(260, 246, 56, 20);
             lblFwTitle.Text = "防火墙:";
             lblFwTitle.TextAlign = ContentAlignment.MiddleLeft;
 
             lblFwStatus = new Label();
-            lblFwStatus.SetBounds(300, 196, 230, 18);
             lblFwStatus.ForeColor = Color.FromArgb(70, 70, 70);
+            lblFwStatus.AutoEllipsis = true;
+            lblFwStatus.TextAlign = ContentAlignment.MiddleLeft;
 
             btnFwElevated = new Button();
-            btnFwElevated.SetBounds(244, 216, 284, 24);
             btnFwElevated.Text = "以管理员身份配置防火墙";
             btnFwElevated.Click += delegate
             {
@@ -2655,17 +2863,51 @@ namespace DSHLauncher
             };
 
             lblOllama = new Label();
-            lblOllama.SetBounds(244, 244, 284, 30);
             lblOllama.ForeColor = Color.FromArgb(120, 100, 40);
             lblOllama.Font = new Font("Microsoft YaHei UI", 8.5f);
-            lblOllama.Text = "";
+            lblOllama.Visible = false;
+
+            // 手动命令：默认折叠，按需展开（自动配置失败时自动展开并标红）
+            lnkManual = new LinkLabel();
+            lnkManual.Text = "防火墙手动配置命令 ▾";
+            lnkManual.LinkBehavior = LinkBehavior.HoverUnderline;
+            lnkManual.LinkClicked += delegate
+            {
+                lnkManual.LinkColor = SystemColors.HotTrack;
+                ToggleManual();
+            };
+
+            panManual = new Panel();
+            panManual.Visible = false;
+
+            txtManual = new TextBox();
+            txtManual.Multiline = true;
+            txtManual.ReadOnly = true;
+            txtManual.BackColor = Color.FromArgb(245, 245, 245);
+            txtManual.ForeColor = Color.FromArgb(60, 60, 60);
+            txtManual.Font = new Font("Consolas", 8.5f);
+            txtManual.ScrollBars = ScrollBars.Vertical;
+            txtManual.WordWrap = false;
+
+            btnCopyCmd = new Button();
+            btnCopyCmd.Text = "复制手动命令";
+            btnCopyCmd.Click += delegate { if (txtManual.Text.Length > 0) Clipboard.SetText(txtManual.Text); };
+
+            panManual.Controls.Add(txtManual);
+            panManual.Controls.Add(btnCopyCmd);
 
             // 事件
             chkLan.CheckedChanged += delegate
             {
-                bool ok = host.CommitLanSettings(chkLan.Checked, txtLanPort.Text.Trim(), txtLanPin.Text);
-                if (!ok) chkLan.Checked = host.UiLanEnabled;
-                RefreshLanPanel();
+                if (lanUiUpdating) return;
+                lanUiUpdating = true;
+                try
+                {
+                    bool ok = host.CommitLanSettings(chkLan.Checked, txtLanPort.Text.Trim(), txtLanPin.Text);
+                    if (!ok) chkLan.Checked = host.UiLanEnabled; // 程序化回滚由 lanUiUpdating 守卫吞掉递归
+                    RefreshLanPanel();
+                }
+                finally { lanUiUpdating = false; }
             };
             txtLanPort.Leave += delegate
             {
@@ -2684,151 +2926,176 @@ namespace DSHLauncher
                 }
             };
 
-            pLan.Controls.Add(chkLan);
-            pLan.Controls.Add(lLanPort);
-            pLan.Controls.Add(txtLanPort);
-            pLan.Controls.Add(lblLanStatus);
-            pLan.Controls.Add(txtLanUrl);
-            pLan.Controls.Add(btnCopyUrl);
-            pLan.Controls.Add(btnOpenLan);
-            pLan.Controls.Add(lanQr);
-            pLan.Controls.Add(lblPin);
-            pLan.Controls.Add(txtLanPin);
-            pLan.Controls.Add(btnGenPin);
-            pLan.Controls.Add(lblPinSrc);
-            pLan.Controls.Add(lblPinHint);
-            pLan.Controls.Add(lblFwTitle);
-            pLan.Controls.Add(lblFwStatus);
-            pLan.Controls.Add(btnFwElevated);
-            pLan.Controls.Add(lblOllama);
+            grpLan.Controls.Add(chkLan);
+            grpLan.Controls.Add(lLanPort);
+            grpLan.Controls.Add(txtLanPort);
+            grpLan.Controls.Add(lblLanStatus);
+            grpLan.Controls.Add(txtLanUrl);
+            grpLan.Controls.Add(btnCopyUrl);
+            grpLan.Controls.Add(btnOpenLan);
+            grpLan.Controls.Add(lanQr);
+            grpLan.Controls.Add(lblPin);
+            grpLan.Controls.Add(txtLanPin);
+            grpLan.Controls.Add(btnGenPin);
+            grpLan.Controls.Add(lblPinSrc);
+            grpLan.Controls.Add(lblPinHint);
+            grpLan.Controls.Add(lblFwTitle);
+            grpLan.Controls.Add(lblFwStatus);
+            grpLan.Controls.Add(btnFwElevated);
+            grpLan.Controls.Add(lblOllama);
+            grpLan.Controls.Add(lnkManual);
+            grpLan.Controls.Add(panManual);
+            tabLan.Controls.Add(grpLan);
+        }
 
-            // ==================== 底部区域 ====================
-            // 手动命令
-            Label lblManualTitle = new Label();
-            lblManualTitle.SetBounds(16, 370, 460, 18);
-            lblManualTitle.Text = "防火墙手动命令（自动配置失败时，管理员执行）：";
-
-            txtManual = new TextBox();
-            txtManual.SetBounds(16, 390, 816, 56);
-            txtManual.Multiline = true;
-            txtManual.ReadOnly = true;
-            txtManual.BackColor = Color.FromArgb(245, 245, 245);
-            txtManual.ForeColor = Color.FromArgb(60, 60, 60);
-            txtManual.Font = new Font("Consolas", 8.5f);
-            txtManual.ScrollBars = ScrollBars.Vertical;
-            txtManual.WordWrap = false;
-
-            btnCopyCmd = new Button();
-            btnCopyCmd.SetBounds(840, 408, 130, 28);
-            btnCopyCmd.Text = "复制手动命令";
-            btnCopyCmd.Click += delegate { Clipboard.SetText(txtManual.Text); };
-
-            // dsh 升级
-            grpUpgrade = new GroupBox();
-            grpUpgrade.SetBounds(16, 460, 968, 100);
-            grpUpgrade.Text = "dsh 升级";
+        private void BuildUpgradePage()
+        {
+            grpUp = new GroupBox();
+            grpUp.Text = "dsh 升级";
 
             lblDshVer = new Label();
-            lblDshVer.SetBounds(16, 22, 260, 22);
+            lblDshVer.SetBounds(16, 32, 280, 22);
             lblDshVer.Text = "当前版本: 检测中…";
             lblDshVer.TextAlign = ContentAlignment.MiddleLeft;
-
-            lblDshLatest = new Label();
-            lblDshLatest.SetBounds(16, 48, 260, 22);
-            lblDshLatest.Text = "最新版本: 点击检查";
-            lblDshLatest.TextAlign = ContentAlignment.MiddleLeft;
+            tips.SetToolTip(lblDshVer, "进入本页时自动检测");
 
             btnCheckUpgrade = new Button();
-            btnCheckUpgrade.SetBounds(280, 20, 90, 26);
+            btnCheckUpgrade.SetBounds(310, 28, 96, 26);
             btnCheckUpgrade.Text = "检查更新";
             btnCheckUpgrade.Click += BtnCheckUpgradeClick;
 
+            lblDshLatest = new Label();
+            lblDshLatest.SetBounds(16, 64, 280, 22);
+            lblDshLatest.Text = "最新版本: 点击检查";
+            lblDshLatest.TextAlign = ContentAlignment.MiddleLeft;
+
             btnUpgradeDsh = new Button();
-            btnUpgradeDsh.SetBounds(280, 50, 90, 26);
+            btnUpgradeDsh.SetBounds(310, 60, 96, 26);
             btnUpgradeDsh.Text = "升级 dsh";
             btnUpgradeDsh.Enabled = false;
             btnUpgradeDsh.Click += BtnUpgradeDshClick;
 
             progUpgrade = new ProgressBar();
-            progUpgrade.SetBounds(380, 22, 572, 20);
             progUpgrade.Style = ProgressBarStyle.Marquee;
             progUpgrade.MarqueeAnimationSpeed = 0;
             progUpgrade.Visible = false;
 
             lblUpgradeStatus = new Label();
-            lblUpgradeStatus.SetBounds(380, 48, 572, 22);
             lblUpgradeStatus.Text = "";
             lblUpgradeStatus.TextAlign = ContentAlignment.MiddleLeft;
+            lblUpgradeStatus.AutoEllipsis = true;
 
-            grpUpgrade.Controls.Add(lblDshVer);
-            grpUpgrade.Controls.Add(lblDshLatest);
-            grpUpgrade.Controls.Add(btnCheckUpgrade);
-            grpUpgrade.Controls.Add(btnUpgradeDsh);
-            grpUpgrade.Controls.Add(progUpgrade);
-            grpUpgrade.Controls.Add(lblUpgradeStatus);
+            lblUpgradeHint = new Label();
+            lblUpgradeHint.ForeColor = Color.Gray;
+            lblUpgradeHint.Font = new Font("Microsoft YaHei UI", 8.5f);
+            lblUpgradeHint.Text = "升级过程：停止服务 → npm install（约 3–5 分钟）→ 验证 → 自动重启；\n期间网页端会短暂断开，升级进行中本窗口锁定页切换。";
 
-            // 底部按钮
+            grpUp.Controls.Add(lblDshVer);
+            grpUp.Controls.Add(btnCheckUpgrade);
+            grpUp.Controls.Add(lblDshLatest);
+            grpUp.Controls.Add(btnUpgradeDsh);
+            grpUp.Controls.Add(progUpgrade);
+            grpUp.Controls.Add(lblUpgradeStatus);
+            grpUp.Controls.Add(lblUpgradeHint);
+            tabUpgrade.Controls.Add(grpUp);
+        }
+
+        private void BuildHelpPage()
+        {
+            grpAbout = new GroupBox();
+            grpAbout.Text = "关于";
+
+            lblAboutTitle = new Label();
+            lblAboutTitle.Text = Program.AppName + " v" + Program.AppVersion;
+            lblAboutTitle.Font = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold);
+
+            lblAboutDesc = new Label();
+            lblAboutDesc.ForeColor = Color.Gray;
+            lblAboutDesc.Font = new Font("Microsoft YaHei UI", 8.5f);
+            lblAboutDesc.Text = "作者: KristoffersonLee\n内嵌 WebView2 桌面启动器：自动启动/接管 dsh web，支持局域网共享与手机端访问。";
+
+            grpAbout.Controls.Add(lblAboutTitle);
+            grpAbout.Controls.Add(lblAboutDesc);
+            tabHelp.Controls.Add(grpAbout);
+
+            grpQuick = new GroupBox();
+            grpQuick.Text = "快捷操作";
+
             btnDoc = new Button();
-            btnDoc.SetBounds(16, 580, 96, 30);
+            btnDoc.SetBounds(16, 32, 110, 30);
             btnDoc.Text = "使用文档";
             btnDoc.Click += delegate { GuideForm.ShowGuide(this); };
 
             btnLogDir = new Button();
-            btnLogDir.SetBounds(120, 580, 116, 30);
+            btnLogDir.SetBounds(134, 32, 124, 30);
             btnLogDir.Text = "打开日志目录";
             btnLogDir.Click += delegate { host.OpenLogDir(); };
 
             btnCleanArch = new Button();
-            btnCleanArch.SetBounds(244, 580, 140, 30);
+            btnCleanArch.SetBounds(266, 32, 132, 30);
             btnCleanArch.Text = "清理归档会话";
             btnCleanArch.Click += delegate { host.CleanArchivedSessions(); };
 
             btnAbout = new Button();
-            btnAbout.SetBounds(392, 580, 100, 30);
+            btnAbout.SetBounds(406, 32, 110, 30);
             btnAbout.Text = "关于此程序";
             btnAbout.Click += delegate { host.ShowAbout(); };
 
+            grpQuick.Controls.Add(btnDoc);
+            grpQuick.Controls.Add(btnLogDir);
+            grpQuick.Controls.Add(btnCleanArch);
+            grpQuick.Controls.Add(btnAbout);
+            tabHelp.Controls.Add(grpQuick);
+
             btnClose = new Button();
-            btnClose.SetBounds(888, 580, 96, 30);
             btnClose.Text = "关闭";
             btnClose.Click += delegate { Close(); };
+            tabHelp.Controls.Add(btnClose);
+        }
 
-            // ==================== 添加控件到窗体 ====================
-            this.Controls.Add(lPort);
-            this.Controls.Add(txtPort);
-            this.Controls.Add(lWork);
-            this.Controls.Add(txtWork);
-            this.Controls.Add(btnBrowseWork);
-            this.Controls.Add(chkTray);
-            this.Controls.Add(btnSave);
-            this.Controls.Add(lLog);
-            this.Controls.Add(txtLog);
-            this.Controls.Add(pLan);
-            this.Controls.Add(lblManualTitle);
-            this.Controls.Add(txtManual);
-            this.Controls.Add(btnCopyCmd);
-            this.Controls.Add(grpUpgrade);
-            this.Controls.Add(btnDoc);
-            this.Controls.Add(btnLogDir);
-            this.Controls.Add(btnCleanArch);
-            this.Controls.Add(btnAbout);
-            this.Controls.Add(btnClose);
-
-            // 日志实时显示
-            host.LogLine += OnLogLine;
-            this.FormClosed += delegate
+        // ========================= 常规页逻辑 =========================
+        private void OnSaveClick(object sender, EventArgs e)
+        {
+            string portText = txtPort.Text.Trim();
+            int p;
+            if (!int.TryParse(portText, out p) || p < 1 || p > 65535)
             {
-                try { host.LogLine -= OnLogLine; } catch { }
-                try { if (refreshTimer != null) refreshTimer.Stop(); } catch { }
-            };
-
-            refreshTimer = new System.Windows.Forms.Timer();
-            refreshTimer.Interval = 1500;
-            refreshTimer.Tick += delegate { RefreshLanPanel(); };
-            refreshTimer.Start();
-
+                // 行内错误提示替代弹窗
+                lblPortError.Text = "端口必须是 1–65535 之间的数字";
+                lblPortError.Visible = true;
+                return;
+            }
+            lblPortError.Visible = false;
+            host.CommitSettings(portText, txtWork.Text.Trim(), chkTray.Checked);
+            txtPort.Text = host.UiPortText;
+            txtWork.Text = host.UiWorkDir;
+            chkTray.Checked = host.UiTray;
+            UpdateSaveState();
             RefreshLanPanel();
-            InitQrWebView2();
+        }
+
+        private bool SettingsDirty()
+        {
+            return txtPort.Text.Trim() != host.UiPortText
+                || txtWork.Text.Trim() != host.UiWorkDir
+                || chkTray.Checked != host.UiTray;
+        }
+
+        private void UpdateSaveState()
+        {
+            if (btnSave == null || btnSave.IsDisposed) return;
+            bool dirty = SettingsDirty();
+            btnSave.Enabled = dirty;
+            btnSave.Text = dirty ? "保存设置" : "已保存";
+        }
+
+        private void HidePortErrorIfValid()
+        {
+            int p;
+            if (int.TryParse(txtPort.Text.Trim(), out p) && p >= 1 && p <= 65535)
+            {
+                lblPortError.Visible = false;
+            }
         }
 
         private void OnLogLine(string line)
@@ -2853,29 +3120,30 @@ namespace DSHLauncher
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
-            RefreshLanPanel();
-            // 打开设置窗口时自动检测当前版本
-            if (lblDshVer.Text.Contains("检测中"))
-            {
-                CheckCurrentVersion();
-            }
+            if (tabs.SelectedTab == tabLan) RefreshLanPanel();
         }
 
-        // ---------------- dsh 升级 ----------------
+        // ========================= dsh 升级 =========================
         private void CheckCurrentVersion()
         {
-            try
+            // 后台线程执行 cmd 检测，避免阻塞 UI（原实现同步等待最长 10 秒）
+            lblDshVer.Text = "当前版本: 检测中…";
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                string ver = host.GetDshVersion();
-                if (!string.IsNullOrEmpty(ver))
-                    lblDshVer.Text = "当前版本: " + ver;
-                else
-                    lblDshVer.Text = "当前版本: 未安装";
-            }
-            catch (Exception ex)
-            {
-                lblDshVer.Text = "当前版本: 检测失败(" + ex.Message + ")";
-            }
+                string ver = "";
+                try { ver = host.GetDshVersion(); } catch { }
+                if (IsDisposed) return;
+                try
+                {
+                    Invoke((Action)(delegate
+                    {
+                        if (IsDisposed) return;
+                        lblDshVer.Text = string.IsNullOrEmpty(ver) ? "当前版本: 未安装" : "当前版本: " + ver;
+                    }));
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+            });
         }
 
         private void BtnCheckUpgradeClick(object sender, EventArgs e)
@@ -2936,7 +3204,7 @@ namespace DSHLauncher
         {
             if (upgrading) return;
             if (string.IsNullOrEmpty(latestDshVersion)) return;
-            var r = MessageBox.Show(
+            DialogResult r = MessageBox.Show(
                 "将升级 dsh 到 " + latestDshVersion + "。\n\n升级过程会：\n1. 停止 dsh web 服务\n2. 执行 npm install（约 3-5 分钟）\n3. 验证安装\n4. 重启服务\n\n期间会断开连接，是否继续？",
                 "升级 dsh", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (r != DialogResult.Yes) return;
@@ -2956,15 +3224,22 @@ namespace DSHLauncher
                 }
                 catch (Exception ex)
                 {
-                    Invoke((Action)(delegate
+                    if (IsDisposed) return;
+                    try
                     {
-                        upgrading = false;
-                        btnUpgradeDsh.Enabled = true;
-                        btnCheckUpgrade.Enabled = true;
-                        progUpgrade.Visible = false;
-                        progUpgrade.MarqueeAnimationSpeed = 0;
-                        lblUpgradeStatus.Text = "升级失败: " + ex.Message;
-                    }));
+                        Invoke((Action)(delegate
+                        {
+                            if (IsDisposed) return;
+                            upgrading = false;
+                            btnUpgradeDsh.Enabled = true;
+                            btnCheckUpgrade.Enabled = true;
+                            progUpgrade.Visible = false;
+                            progUpgrade.MarqueeAnimationSpeed = 0;
+                            lblUpgradeStatus.Text = "升级失败: " + ex.Message;
+                        }));
+                    }
+                    catch (ObjectDisposedException) { }
+                    catch (InvalidOperationException) { }
                 }
             });
         }
@@ -3004,47 +3279,90 @@ namespace DSHLauncher
             catch (InvalidOperationException) { }
         }
 
-        // ---------------- 局域网面板刷新 + 二维码 ----------------
+        // ========================= 局域网页逻辑 =========================
+        private void ToggleManual()
+        {
+            manualExpanded = !manualExpanded;
+            panManual.Visible = manualExpanded;
+            lnkManual.Text = manualExpanded ? "收起手动配置命令 ▴" : "防火墙手动配置命令 ▾";
+            RelayoutManualLink();
+        }
+
+        private void RelayoutManualLink()
+        {
+            if (grpLan == null) return;
+            int lh = grpLan.ClientSize.Height;
+            if (lh < 200) return;
+            int y = manualExpanded ? lh - 12 - 88 - 26 : lh - 12 - 26;
+            lnkManual.SetBounds(16, y, 240, 22);
+        }
+
         private void RefreshLanPanel()
         {
-            if (IsDisposed) return;
+            if (IsDisposed || grpLan == null) return;
+            if (InvokeRequired)
+            {
+                try { BeginInvoke((Action)(delegate { RefreshLanPanel(); })); } catch { }
+                return;
+            }
+            // 程序化 UI 回写（chkLan 等）不得触发提交事件
+            lanUiUpdating = true;
             try
             {
-                if (InvokeRequired)
-                {
-                    BeginInvoke((Action)(delegate { RefreshLanPanel(); }));
-                    return;
-                }
-                chkLan.Checked = host.UiLanEnabled;
-                // 正在编辑中的输入框不刷新，避免用户输入被定时器覆盖丢失（自定义 PIN/端口必须可靠提交）
-                if (!txtLanPort.Focused) txtLanPort.Text = host.UiLanPortText;
-                if (!txtLanPin.Focused) txtLanPin.Text = host.UiLanPin;
-                lblLanStatus.Text = host.UiLanStatus;
-                txtLanUrl.Text = host.UiLanPlainUrl;
-                lblPinSrc.Text = "生效来源: " + host.UiLanPinSource;
-                lblFwStatus.Text = host.UiFirewallStatus;
-                int lp = 3081;
-                try { lp = int.Parse(host.UiLanPortText); } catch { }
-                txtManual.Text = LanAccess.ManualAddCommand(lp) + "\r\n" + LanAccess.ManualRemoveCommand(lp);
+                if (chkLan.Checked != host.UiLanEnabled) chkLan.Checked = host.UiLanEnabled;
+                // 正在编辑中的输入框不刷新，避免用户输入被定时器覆盖丢失
+                if (!txtLanPort.Focused && txtLanPort.Text != host.UiLanPortText) txtLanPort.Text = host.UiLanPortText;
+                if (!txtLanPin.Focused && txtLanPin.Text != host.UiLanPin) txtLanPin.Text = host.UiLanPin;
+                SetText(lblLanStatus, host.UiLanStatus);
+                SetText(txtLanUrl, host.UiLanPlainUrl);
+                SetText(lblPinSrc, "生效来源: " + host.UiLanPinSource);
+                SetText(lblFwStatus, host.UiFirewallStatus);
+                int lp;
+                if (!int.TryParse(host.UiLanPortText, out lp)) lp = 3081;
+                SetText(txtManual, LanAccess.ManualAddCommand(lp) + "\r\n" + LanAccess.ManualRemoveCommand(lp));
                 // Ollama 提示按 LAN 开关动态显示（OLLAMA_HOST 仅在开启局域网时才会被设置）
                 if (host.UiOllamaDetected)
                 {
                     lblOllama.Visible = true;
-                    lblOllama.Text = host.UiLanEnabled
+                    SetText(lblOllama, host.UiLanEnabled
                         ? "检测到 Ollama：局域网已开启，dsh 进程已设置 OLLAMA_HOST=0.0.0.0、OLLAMA_ORIGINS=*。"
-                        : "检测到 Ollama：开启局域网访问后，将为 dsh 进程自动设置 OLLAMA_HOST=0.0.0.0、OLLAMA_ORIGINS=*。";
+                        : "检测到 Ollama：开启局域网访问后，将为 dsh 进程自动设置 OLLAMA_HOST=0.0.0.0、OLLAMA_ORIGINS=*。");
                 }
                 else
                 {
                     lblOllama.Visible = false;
                 }
+                // 防火墙自动配置失败（规则缺失）→ 自动展开手动命令并标红，用户无需自行寻找
+                bool fwMissing = host.UiLanEnabled
+                    && host.UiFirewallStatus.StartsWith("未配置（需要管理员权限）", StringComparison.Ordinal);
+                if (fwMissing && !manualExpanded)
+                {
+                    lnkManual.LinkColor = Color.Firebrick;
+                    ToggleManual();
+                }
                 ReloadQr();
             }
             catch { }
+            finally { lanUiUpdating = false; }
+        }
+
+        // 内容无变化不重写控件，消除定时器刷新闪烁
+        private static void SetText(Control c, string v)
+        {
+            if (c.Text != v) c.Text = v;
+        }
+
+        private void EnsureQrInit()
+        {
+            // 首次进入局域网页才初始化二维码 WebView2，加快窗口打开速度
+            if (qrInitStarted) return;
+            qrInitStarted = true;
+            InitQrWebView2();
         }
 
         // 二维码 WebView2 环境缓存（同进程复用同一 user-data-folder，窗体重建不重复创建）
         // 缓存 Task 而非 Result：避免多线程竞态下重复创建环境。
+        // 失败时清除缓存，允许下次重试（避免故障任务被永久缓存导致 WebView2 永久不可用）。
         private static Task<CoreWebView2Environment> cachedQrEnvTask = null;
         private static readonly object cachedQrEnvLock = new object();
 
@@ -3062,7 +3380,7 @@ namespace DSHLauncher
                 Task<CoreWebView2Environment> envTask;
                 lock (cachedQrEnvLock)
                 {
-                    if (cachedQrEnvTask != null)
+                    if (cachedQrEnvTask != null && !cachedQrEnvTask.IsFaulted && !cachedQrEnvTask.IsCanceled)
                     {
                         envTask = cachedQrEnvTask;
                     }
@@ -3075,7 +3393,12 @@ namespace DSHLauncher
                 envTask.ContinueWith(
                     delegate(Task<CoreWebView2Environment> t)
                     {
-                        if (t.IsFaulted || t.IsCanceled) return;
+                        if (t.IsFaulted || t.IsCanceled)
+                        {
+                            // 失败时清除缓存，下次可重试
+                            lock (cachedQrEnvLock) { if (cachedQrEnvTask == t) cachedQrEnvTask = null; }
+                            return;
+                        }
                         CoreWebView2Environment env = t.Result;
                         lanQr.EnsureCoreWebView2Async(env).ContinueWith(delegate(Task t2)
                         {
@@ -3255,6 +3578,7 @@ namespace DSHLauncher
         // WebView2 环境缓存：同一进程对同一 user-data-folder 重复 CreateAsync 会失败，
         // 窗体重建时复用已创建的环境（static 跨实例共享）。
         // 缓存 Task 而非 Result：避免多线程竞态下重复创建环境（CreateAsync 在锁内发起，首个完成后缓存 Task，后续直接复用）。
+        // 失败时清除缓存，允许下次重试（避免故障任务被永久缓存导致 WebView2 永久不可用）。
         private static Task<CoreWebView2Environment> cachedEnvTask = null;
         private static readonly object cachedEnvLock = new object();
 
@@ -3274,7 +3598,7 @@ namespace DSHLauncher
                 Task<CoreWebView2Environment> envTask;
                 lock (cachedEnvLock)
                 {
-                    if (cachedEnvTask != null)
+                    if (cachedEnvTask != null && !cachedEnvTask.IsFaulted && !cachedEnvTask.IsCanceled)
                     {
                         envTask = cachedEnvTask;
                     }
@@ -3287,7 +3611,13 @@ namespace DSHLauncher
                 envTask.ContinueWith(
                     delegate(Task<CoreWebView2Environment> t)
                     {
-                        if (t.IsFaulted || t.IsCanceled) { OnInitFailed(); return; }
+                        if (t.IsFaulted || t.IsCanceled)
+                        {
+                            // 失败时清除缓存，下次可重试
+                            lock (cachedEnvLock) { if (cachedEnvTask == t) cachedEnvTask = null; }
+                            OnInitFailed();
+                            return;
+                        }
                         CoreWebView2Environment env = t.Result;
                         wv.EnsureCoreWebView2Async(env).ContinueWith(delegate(Task t2)
                         {

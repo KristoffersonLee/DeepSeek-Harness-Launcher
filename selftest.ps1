@@ -1,4 +1,5 @@
 # selftest.ps1 — 运行 DSHLauncher 的隐藏自检模式并打印报告
+$ErrorActionPreference = 'Stop'
 $exe = Join-Path $PSScriptRoot 'DSHLauncher.exe'
 if (-not (Test-Path $exe)) { throw "未找到 $exe，请先运行 build.ps1" }
 

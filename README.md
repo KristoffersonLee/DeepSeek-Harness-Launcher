@@ -14,9 +14,9 @@ A Windows desktop launcher for **DeepSeek Harness**: double-click to automatical
 
 **[中文说明](#中文说明) | [English](#english)**
 
-> 📖 升级、dsh 维护与故障排查见独立手册：**[中文维护手册](docs/MAINTENANCE.zh.md)** · **[English Maintenance Manual](docs/MAINTENANCE.en.md)**
+> 📖 升级、dsh 维护与故障排查见独立手册：**[中文维护手册](MAINTENANCE.zh.md)** · **[English Maintenance Manual](MAINTENANCE.en.md)**
 >
-> For upgrading dsh, maintenance and troubleshooting, see the standalone manuals: **[中文维护手册](docs/MAINTENANCE.zh.md)** · **[English Maintenance Manual](docs/MAINTENANCE.en.md)**
+> For upgrading dsh, maintenance and troubleshooting, see the standalone manuals: **[中文维护手册](MAINTENANCE.zh.md)** · **[English Maintenance Manual](MAINTENANCE.en.md)**
 
 ---
 
@@ -66,7 +66,7 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
   - 零依赖 Node 网关（内嵌资源），SSE / WebSocket 流式透传，PWA 增强（manifest / SW / 添加到主屏幕）
   - Windows 防火墙自动放行（`remoteip=localsubnet`，仅局域网）；无管理员权限时给出可复制的手动命令
   - 开启局域网后为 dsh 进程设置 `OLLAMA_HOST=0.0.0.0`、`OLLAMA_ORIGINS=*`（若使用 Ollama 本地推理，局域网内的 Harness 网关即可调用模型接口）
-- 🔍 **全量审阅修复（v4.0）**：probeReady 竞态条件（代际号）、UpgradeDsh 管道死锁（异步排空 + 5 分钟超时）、升级回调进程崩溃守卫、cache-bust 硬编码 IP、WebView2 检测优化（单层扫描）、下载退避重试、Node 多版本选择一致性、卸载脚本增强（防火墙规则 + %APPDATA% 清理 + settings.ini 保留）
+- 🔍 **全量审阅修复（v4.0.0）**：probeReady 竞态条件（代际号）、UpgradeDsh 管道死锁（异步排空 + 5 分钟超时）、升级回调进程崩溃守卫、cache-bust 硬编码 IP、WebView2 检测优化（单层扫描）、下载退避重试、Node 多版本选择一致性、卸载脚本增强（防火墙规则 + %APPDATA% 清理 + settings.ini 保留）
 
 ## 安装
 
@@ -214,7 +214,7 @@ DeepSeek Harness is a web application (React frontend + Node.js service) that is
   - zero-dependency Node gateway (embedded resource), SSE/WebSocket passthrough, PWA (manifest/SW/add-to-homescreen)
   - auto Windows Firewall rule scoped to `remoteip=localsubnet`; copyable manual commands when elevation is missing
   - when LAN is enabled, sets `OLLAMA_HOST=0.0.0.0` and `OLLAMA_ORIGINS=*` for the dsh process (for local Ollama inference; allows the LAN gateway to reach the model API)
-- 🔍 **Full audit fixes (v4.0)**: probeReady race condition (generation counter), UpgradeDsh pipe deadlock (async drain + 5-min timeout), upgrade callback crash guard, cache-bust hardcoded IP, WebView2 detection optimization (single-level scan), download backoff retry, Node multi-version selection consistency, uninstaller enhancement (firewall + %APPDATA% cleanup + settings.ini preserved)
+- 🔍 **Full audit fixes (v4.0.0)**: probeReady race condition (generation counter), UpgradeDsh pipe deadlock (async drain + 5-min timeout), upgrade callback crash guard, cache-bust hardcoded IP, WebView2 detection optimization (single-level scan), download backoff retry, Node multi-version selection consistency, uninstaller enhancement (firewall + %APPDATA% cleanup + settings.ini preserved)
 
 ## Installation
 
