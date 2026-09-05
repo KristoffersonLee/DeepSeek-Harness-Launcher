@@ -56,7 +56,7 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
 - 📝 **日志文件**：`%LOCALAPPDATA%\DSHLauncher\logs\launcher.log`（超 2MB 自动裁剪）
 - 🗂️ **托盘菜单**：打开界面 / 刷新 / 浏览器打开 / 启动 / 停止 / 新手指引 / 打开日志目录 / 设置 / 关于 / 退出
 - 🧩 **零依赖分发**：单文件安装包内嵌启动器与 WebView2 运行库，自动部署缺失环境（Node.js / dsh / WebView2 运行时）
-- 📡 **局域网共享与手机端（v4.0）**：手机/平板在同一 WiFi 下扫码即可访问；默认关闭，行为与旧版完全一致
+- 📡 **局域网共享与手机端（v3.0）**：手机/平板在同一 WiFi 下扫码即可访问；默认关闭，行为与旧版完全一致
   - 只绑定当前活跃的 WiFi/以太网**具体 IP**（绝不绑定 0.0.0.0），自动打印地址并生成二维码
   - **全新独立移动端 UI**：会话列表（按工作区分组折叠）+ 完整聊天（历史、上滑加载更早、对话大纲跳转、底部输入栏）
   - **手机端只读模式**：不能新建会话 / 切换或添加工作区（前端隐藏 + 后端 API 拦截双重保障）
@@ -66,6 +66,7 @@ DeepSeek Harness 本身是网页应用（React 前端 + Node.js 服务），通�
   - 零依赖 Node 网关（内嵌资源），SSE / WebSocket 流式透传，PWA 增强（manifest / SW / 添加到主屏幕）
   - Windows 防火墙自动放行（`remoteip=localsubnet`，仅局域网）；无管理员权限时给出可复制的手动命令
   - 开启局域网后为 dsh 进程设置 `OLLAMA_HOST=0.0.0.0`、`OLLAMA_ORIGINS=*`（若使用 Ollama 本地推理，局域网内的 Harness 网关即可调用模型接口）
+- 🔍 **全量审阅修复（v4.0）**：probeReady 竞态条件（代际号）、UpgradeDsh 管道死锁（异步排空 + 5 分钟超时）、升级回调进程崩溃守卫、cache-bust 硬编码 IP、WebView2 检测优化（单层扫描）、下载退避重试、Node 多版本选择一致性、卸载脚本增强（防火墙规则 + %APPDATA% 清理 + settings.ini 保留）
 
 ## 安装
 
@@ -203,7 +204,7 @@ DeepSeek Harness is a web application (React frontend + Node.js service) that is
 - 📝 **Log file**: `%LOCALAPPDATA%\DSHLauncher\logs\launcher.log` (auto-trimmed beyond 2 MB)
 - 🗂️ **Tray menu**: open / refresh / open in browser / start / stop / guide / log folder / settings / about / quit
 - 🧩 **Zero-dependency distribution**: single-file installer embeds the launcher and WebView2 runtime, auto-deploys missing prerequisites (Node.js / dsh / WebView2 Runtime)
-- 📡 **LAN sharing & mobile UI (v4.0)**: phones/tablets on the same WiFi scan a QR code — OFF by default, identical to the old behavior when disabled
+- 📡 **LAN sharing & mobile UI (v3.0)**: phones/tablets on the same WiFi scan a QR code — OFF by default, identical to the old behavior when disabled
   - binds only the detected active WiFi/Ethernet **specific IP** (never 0.0.0.0), prints the address and renders a QR code
   - **brand-new standalone mobile UI**: session list grouped by workspace (collapsible) + full chat (history, load-earlier on scroll, outline navigation, bottom composer)
   - **mobile read-only mode**: no new sessions / no workspace switch or add (hidden in UI + blocked at the gateway API, double protection)
@@ -213,6 +214,7 @@ DeepSeek Harness is a web application (React frontend + Node.js service) that is
   - zero-dependency Node gateway (embedded resource), SSE/WebSocket passthrough, PWA (manifest/SW/add-to-homescreen)
   - auto Windows Firewall rule scoped to `remoteip=localsubnet`; copyable manual commands when elevation is missing
   - when LAN is enabled, sets `OLLAMA_HOST=0.0.0.0` and `OLLAMA_ORIGINS=*` for the dsh process (for local Ollama inference; allows the LAN gateway to reach the model API)
+- 🔍 **Full audit fixes (v4.0)**: probeReady race condition (generation counter), UpgradeDsh pipe deadlock (async drain + 5-min timeout), upgrade callback crash guard, cache-bust hardcoded IP, WebView2 detection optimization (single-level scan), download backoff retry, Node multi-version selection consistency, uninstaller enhancement (firewall + %APPDATA% cleanup + settings.ini preserved)
 
 ## Installation
 
