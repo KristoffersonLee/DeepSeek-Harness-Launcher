@@ -2,6 +2,62 @@
 
 ## v4.0.0 (2026-09-05)
 
+### 🔒 安全修复 / Security Fixes
+
+- **防火墙规则卸载残留**：`netsh delete rule name=` 不支持通配符导致卸载后防火墙规则泄漏，改用 `Get-NetFirewallRule` + `Remove-NetFirewallRule`
+  - Firewall rule leak on uninstall: `netsh delete rule name=` doesn't support wildcards, leaving stale inbound rules; switched to `Get-NetFirewallRule` + `Remove-NetFirewallRule`
+- **WebSocket upgrade 数据丢失**：`proxyUpgrade()` 未转发客户端 `head` 数据导致首帧消息损坏，添加 `psocket.write(head)` 转发
+  - WebSocket upgrade data loss: `proxyUpgrade()` silently dropped the client's buffered frame data, corrupting the first WebSocket messages; now forwards via `psocket.write(head)`
+- **PowerShell 命令注入**：`RunFirewallElevated()` 路径含 `$()` 可被解释为脚本块在 UAC 提权下执行，改用单引号 + 转义
+  - PowerShell command injection: a malicious username containing `$()` could execute as a script block at UAC-elevated privilege; switched to single-quote escaping
+- **Token URL 泄露**：dsh 启动令牌通过 URL 查询参数发送可能出现在服务器日志中，改用 `X-DSH-Token` Header
+  - Token URL exposure: dsh one-time auth token sent via query parameter could appear in server logs; switched to `X-DSH-Token` header
+
+### 🔧 修复与优化 / Fixes & Improvements
+
+- **全面审阅修复**：probeReady 竞态条件（代际号）、UpgradeDsh 管道死锁（异步排空）、升级回调进程崩溃守卫（IsDisposed）、cache-bust 硬编码 IP、WebView2 检测优化（单层扫描）、下载退避重试、Node 多版本选择一致性、卸载脚本增强（防火墙规则 + %APPDATA% 清理）
+  - Full audit fixes: probeReady race (generation counter), UpgradeDsh pipe deadlock (async drain), upgrade callback crash guard (IsDisposed), cache-bust hardcoded IP, WebView2 detection optimization (single-level scan), download backoff retry, Node multi-version selection consistency, uninstaller enhancement (firewall + %APPDATA% cleanup)
+- **netsh 输出编码**：硬编码 UTF-8 导致中文 Windows 下"已启用"等关键词匹配失败，改为 `Encoding.Default`
+  - netsh output encoding: hardcoded UTF-8 broke Chinese keyword matching on Chinese Windows; switched to `Encoding.Default`
+- **上游超时客户端挂起**：`doProxy()`/`proxyUpgrade()` 超时仅销毁连接未返回错误，添加 504/502 响应
+  - Upstream timeout hangs client: timeout handler only destroyed the connection without sending an error response; now returns 504/502
+- **未处理 Promise 拒绝**：`ensureDshCookie().then()` 无 `.catch()` 导致客户端挂起，添加错误处理
+  - Unhandled promise rejection: `ensureDshCookie().then()` had no `.catch()`, leaving client sockets hanging; added error handling
+- **Token 兑换竞态条件**：并发调用方立即返回 false 导致不必要的 502，改用共享 Promise 单飞模式
+  - Token exchange race condition: concurrent callers returned false immediately, causing spurious 502 errors; switched to shared promise (single-flight) pattern
+- **NodeMsiArch 位数检测**：`PROCESSOR_ARCHITECTURE` 返回进程位数而非 OS 位数，改用 `Is64BitOperatingSystem`
+  - OS bitness detection: `PROCESSOR_ARCHITECTURE` returns process bitness, not OS; switched to `Is64BitOperatingSystem`
+- **WebView2 检测**：仅检查 `ProgramFilesX86`，添加 `ProgramFiles` 回退以兼容 ARM64/32 位系统
+  - WebView2 detection: only checked `ProgramFilesX86`; added `ProgramFiles` fallback for ARM64/32-bit compatibility
+- **FindPidOnPort 性能**：优先使用 `IPGlobalProperties.GetActiveTcpListeners()`（毫秒级），netstat 作为回退
+  - FindPidOnPort performance: now uses `IPGlobalProperties.GetActiveTcpListeners()` (ms-level) first, with netstat as fallback
+- **安装向导 Finish 逻辑**：`else if` 导致勾选"新手指引"时跳过"立即启动"，改为两个独立 `if`
+  - Installer Finish logic: `else if` meant checking "show guide" skipped "launch app"; now two independent `if` statements
+
+### 🧹 冗余精简 / Redundancy Cleanup
+
+- **RunProcess 死代码**：移除永不读取的 `StringBuilder buf` 及 `lock` 语句
+  - Dead code: removed `StringBuilder buf` and `lock` statements that were never read
+- **ExtractResource 重复注释**：移除方法上方的冗余注释
+  - Duplicate comment: removed redundant comment above `ExtractResource`
+- **RunCommand 死分支**：移除从未执行的 `elevated` 分支
+  - Dead branch: removed never-executed `elevated` branch from `RunCommand`
+- **selftest.log**：删除生成产物
+  - selftest.log: removed generated artifact from repository
+
+### 📋 一致性修正 / Consistency Fixes
+
+- **版本号统一**：v4.0.0（两处 AppVersion / 安装向导标题 / 注册表 DisplayVersion / README / CHANGELOG）
+  - Version unified: v4.0.0 (both AppVersion consts / installer wizard title / registry DisplayVersion / README / CHANGELOG)
+- **README 文档路径**：`docs/MAINTENANCE.zh.md` → `MAINTENANCE.zh.md`（与安装包实际部署位置一致）
+  - README doc paths: `docs/MAINTENANCE.zh.md` → `MAINTENANCE.zh.md` to match actual installer deployment layout
+- **README 版本号**：功能列表中 "v4.0" → "v4.0.0"
+  - README version: "v4.0" → "v4.0.0" in features list
+- **卸载行为**：与 README 承诺一致（保留 settings.ini，重装后配置不丢失）
+  - Uninstall behavior: matches README promise (preserves settings.ini, config survives reinstall)
+- **uninstall.cmd 路径传递**：通过环境变量传递路径，避免单引号解析失败
+  - uninstall.cmd path handling: passes path via environment variable to avoid single-quote parsing issues
+
 ### 🔧 修复与优化 / Fixes & Improvements
 
 - **全面审阅修复**：probeReady 竞态条件（代际号）、UpgradeDsh 管道死锁（异步排空）、升级回调进程崩溃守卫（IsDisposed）、cache-bust 硬编码 IP、WebView2 检测优化（单层扫描）、下载退避重试、Node 多版本选择一致性、卸载脚本增强（防火墙规则 + %APPDATA% 清理）
