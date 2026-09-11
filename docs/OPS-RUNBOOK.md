@@ -279,6 +279,49 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File build-setup.ps1     # 安装包
   （v5.0.0 前实测如此）。
 - 生成的两个文件都以 **ASCII + CRLF + 无 BOM** 写出。
 
+### 4.3 发布到 GitHub（tag + Release；风格必须与既有版本一致）
+
+既有 10 个版本（v1.0.0–v4.2.4）的统一风格：**annotated tag**（消息 `Release version <x.y.z>`）
++ **Release 标题 = tag 名** + **正文 = `docs/RELEASE_NOTES_v<版本>.md` 的内容** +
+**只挂一个资源 `DSHLauncherSetup.exe`** + 标记为 Latest。
+
+```powershell
+$repo = 'KristoffersonLee/DeepSeek-Harness-Launcher'
+
+# 1) annotated tag（消息风格与旧版一致）
+git tag -a v5.0.0 -m "Release version 5.0.0"
+git push origin main          # 首次推送"重建后的历史"时必须 --force；之后正常推
+git push origin v5.0.0
+
+# 2) Release：正文取发布说明，资源挂安装包
+gh release create v5.0.0 --repo $repo --title v5.0.0 --latest `
+  --notes-file docs\RELEASE_NOTES_v5.0.0.md DSHLauncherSetup.exe
+```
+
+⚠️ **正文里的仓库相对链接必须改写成绝对 URL**：Release 页面没有仓库上下文，
+`[CHANGELOG.md](CHANGELOG.md)` 这类链接在 Release 页会 404
+（`docs/RELEASE_NOTES_v5.0.0.md` 里就有 4 个）。做法是**只在发布时**生成一份改写副本，
+仓库内的文件保持相对链接（符合文档约定）：
+
+```powershell
+$base = "https://github.com/$repo/blob/main/docs/"
+$note = Get-Content docs\RELEASE_NOTES_v5.0.0.md -Encoding UTF8 -Raw
+$fixed = [regex]::Replace($note, '\]\(([A-Za-z0-9._\-]+\.md)\)', ('](' + $base + '$1)'))
+[IO.File]::WriteAllText("$env:TEMP\body.md", $fixed, (New-Object Text.UTF8Encoding($false)))
+gh release edit v5.0.0 --repo $repo --notes-file "$env:TEMP\body.md"
+```
+
+**发布后 30 秒核对**（必须逐条对上，否则说明上传的不是验证过的产物）：
+
+```powershell
+gh release view v5.0.0 --repo $repo --json assets -q '.assets[]|{name,size,digest}'
+(Get-FileHash .\DSHLauncherSetup.exe -Algorithm SHA256).Hash   # 必须等于上面的 digest（小写）
+git ls-remote origin refs/heads/main refs/tags                 # SHA 必须等于本地 git rev-parse
+```
+
+> **已发布的 tag 不要移动**：发版之后若有纯文档提交，正常 `git push origin main` 即可，
+> 让 main 走在 tag 前面（v5.0.0 即如此：tag 指向交付提交 `557d466`，其后可继续有文档提交）。
+
 ---
 
 ## 5. 版本号修改 checklist（改版本时只有一处需要改）
