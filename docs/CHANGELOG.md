@@ -33,10 +33,23 @@
 `dsh-ui` 两项（三个成员当时用的是裸 `{ path = "../..." }`）。已统一改为 `workspace = true`
 （`Cargo.lock` **零变化**，语义等价），并新增门禁断言钉死，防止再次漂移。
 
+**v2 生效后的工具同步复核（本轮第二遍，因此门禁 177 → 178）**：把主工具链切过去之后，
+又重新审了一遍"自清洁与其他工具是否绑死了旧布局"。结论：全库无脚本依赖构建目录的内部布局
+（静态扫描 + 逐工具实跑双证），只有**一处**需要同步 —— `clean.ps1 -Cache` 的保留清单漏了
+`CACHEDIR.TAG`：实测 cargo 在 stable / v2 / `CARGO_BUILD_BUILD_DIR` 三种配置下**都会**写它，
+但 cargo **只在创建构建目录时**写、之后不补写，于是被 `-Cache` 删掉后本仓库的 `target\` 真的
+丢了该标记（1.9 GB 缓存不再被备份软件跳过，`legacyBuildDirs` 的识别判据也会在这类目录上失效）。
+已把它加进保留清单并用 cargo 自己产出的字节恢复标记；另新增门禁断言
+「`assets/whale-path.txt`（make-icon 的唯一输入）必须存在」—— 起因是本轮清理"旧版遗留资产"时
+我用 `Select-String -SimpleMatch` 误判该文件零引用而误删，导致 `build.ps1`/`build-setup.ps1`
+双双退出码 1；已从 DSH 会话记录恢复并用"确定性重建的 `app.ico` SHA256 一致"证明逐字节等价，
+事故记录与预防规则见 [`OPS-RUNBOOK.md`](OPS-RUNBOOK.md) §7.7。
+
 **本轮验证**：`fmt --check` 0 · `clippy -D warnings` 0（**且构建输出无 manifest 警告**）·
 单测 **149/149** · 一致性门禁 **178/178**（PS 5.1 与 PS 7 同结果）· 版本链路 **33/0/0** ·
 `gen-facts -Check` 一致 · 模拟安装 dry-run PASS · `verify-build-layout.ps1 -Run -IncludeNightly` 通过 ·
-`selftest.ps1` A1/A2/B/C/D/E 全部 PASS。
+`selftest.ps1` A1/A2/B/C/D/E 全部 PASS · `finish-release.ps1` **14 步全通过**（含 cargo-audit 与
+cargo-machete，见 [`FINISH-REPORT.md`](FINISH-REPORT.md)）。
 
 ---
 
