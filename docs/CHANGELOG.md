@@ -34,7 +34,7 @@
 （`Cargo.lock` **零变化**，语义等价），并新增门禁断言钉死，防止再次漂移。
 
 **本轮验证**：`fmt --check` 0 · `clippy -D warnings` 0（**且构建输出无 manifest 警告**）·
-单测 **149/149** · 一致性门禁 **177/177**（PS 5.1 与 PS 7 同结果）· 版本链路 **33/0/0** ·
+单测 **149/149** · 一致性门禁 **178/178**（PS 5.1 与 PS 7 同结果）· 版本链路 **33/0/0** ·
 `gen-facts -Check` 一致 · 模拟安装 dry-run PASS · `verify-build-layout.ps1 -Run -IncludeNightly` 通过 ·
 `selftest.ps1` A1/A2/B/C/D/E 全部 PASS。
 
@@ -110,7 +110,7 @@
 重复执行返回 `0` 并报告"没有注册表残留"。门禁新增 7 条断言（模式存在、帮助文本、零文件系统
 变更、三值印证、护栏复用、dry-run、快捷方式匹配规则单一实现）。
 
-**验证摘要**（详细见发布验证记录）：单元测试 **149**（`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 21 · `dsh-buildinfo` 6）；一致性门禁 **177/177**（PS 5.1 与 PS 7 同结果）；`clippy --all-targets --all-features -D warnings` **0 警告**；`cargo fmt --check` **通过**；依赖审计（OSV 通道）**Windows 构建图内 0 漏洞**（`glib` / `proc-macro-error` 均仅在非 Windows 依赖图中）。
+**验证摘要**（详细见发布验证记录）：单元测试 **149**（`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 21 · `dsh-buildinfo` 6）；一致性门禁 **178/178**（PS 5.1 与 PS 7 同结果）；`clippy --all-targets --all-features -D warnings` **0 警告**；`cargo fmt --check` **通过**；依赖审计（OSV 通道）**Windows 构建图内 0 漏洞**（`glib` / `proc-macro-error` 均仅在非 Windows 依赖图中）。
 
 ---
 
@@ -375,7 +375,7 @@
 | 指标 | 重构初版 | 当前（5.0.0 LTS） |
 |---|---|---|
 | 单元测试 | 65 | **149** |
-| 一致性校验项 | 66 | **177** |
+| 一致性校验项 | 66 | **178** |
 | 版本链路项 | 23 | **28** |
 | 启动器工作集（窗口关闭态） | 23.9 MB（另一口径） | **13.2 MB**（同口径实测） |
 | 冷启动「就绪 vs token」 | 未测（缺陷未暴露） | **就绪早 914 ms**，由 `Ready{url:None}` + 补发覆盖 |
@@ -664,7 +664,7 @@ Finalisation round — verification & tooling (new):
 | Metric | Initial rewrite | Finalisation round |
 |---|---|---|
 | Unit tests | 65 | **149** |
-| Consistency checks | 66 | **177** |
+| Consistency checks | 66 | **178** |
 | Version-chain checks | 23 | **28** |
 | Launcher working set (window closed) | 23.9 MB (a different measurement basis) | **13.2 MB** (same basis) |
 | Cold-start "ready vs token" ordering | not measured (defect not yet exposed) | ready arrives **914 ms earlier** → covered by `Ready{url:None}` + re-emit |

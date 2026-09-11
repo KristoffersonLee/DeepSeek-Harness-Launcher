@@ -411,6 +411,33 @@ Get-ChildItem -Recurse -File -Include *.rs -Path crates | Where-Object { $_.Leng
   当前 3 条记录（glib×2、proc-macro-error）全在图外 → `exit 0`。
   **改 GUI crate 的 feature 时必须重跑**：一旦某个包进入 Windows 图，它会立刻变红。
 
+### 7.7 事故记录：清理"旧版残留"时误删 make-icon 的数据源（已完整恢复）
+
+- **现象**：清理仓库里的 v1–v4 遗留资产时删掉了 `assets/whale-path.txt`（依据是"全库零引用"）。
+  随后 `tools/finish-release.ps1` 的第 2、3 步报 `build.ps1 退出码 1` / `build-setup.ps1 退出码 1`，
+  而该脚本只记录退出码、**拿不到子进程的输出**，所以现场看不出原因。
+- **根因（两处叠加）**：
+  1. **判据错**：核查引用时用了 `Select-String -SimpleMatch -Pattern 'assets|whale'`。
+     `-SimpleMatch` 是**字面串**匹配，`|` 不会被当作交替符 —— 实际是在搜 `assets|whale`
+     这个字符串本身，必然零命中，于是得到"零引用"的**假阴性**。真实情况是
+     `make-icon.ps1` 第 13–14 行把它当作**唯一数据源**（缺失即 `throw`），而 `build.ps1`
+     第一步就是调用 `make-icon.ps1`。
+  2. **删除前没有跑门禁**：门禁当时**没有**断言该文件存在，因此删完没有任何红灯。
+- **恢复步骤（两条经验都可复用）**：
+  1. 文件已随历史重写被 `git gc` 回收、远端又不可达 ⇒ 从 **DSH 会话记录**恢复：
+     `%USERPROFILE%\.dsh\sessions\<workspace>\<session>\session.v3.jsonl.zstd` 是
+     seekable-zstd（**串接帧**）；按帧魔数 `28 B5 2F FD` 切分后逐帧调用
+     `zlib.zstdDecompressSync`（Node 22+/26 内置，直接 `zstdDecompressSync` 只能解第一帧），
+     再从解出的 JSONL 里取出该行原文。
+  2. **用确定性产物反向验证**：`make-icon.ps1` 对同一输入必然产出同样的 `app.ico`，
+     因此判据是"用恢复的原文重建 `app.ico`，与现存文件 **SHA256 相同**"——
+     这等价于证明恢复内容与原始文件**逐字节一致**（本次实测：3450 B，SHA256 `A2EFB5AF…` 一致）。
+- **预防规则（已落地）**：
+  * 门禁新增断言：`assets/whale-path.txt` 必须存在（`make-icon.ps1` 的唯一输入）；
+  * **禁止用 `-SimpleMatch` 核查"是否存在引用"** —— 它不做正则交替，会静默给出假阴性；
+    改用默认正则 `-Pattern 'a|b'` 或 `-Pattern @('a','b')`；
+  * 删除任何"疑似无用"的文件之前，**先跑一遍门禁**：本轮的漏网正是因为它当时没覆盖该文件。
+
 ---
 
 ## 8. 工具链契约：钉死的 nightly（build-dir Layout v2）与回退到 stable

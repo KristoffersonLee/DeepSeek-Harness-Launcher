@@ -522,7 +522,7 @@ DRY-RUN：以上为完整影响范围；未改动任何内容。
 | `cargo fmt --all -- --check` | 通过（exit 0；新 rustfmt **无格式漂移**） |
 | `cargo clippy --workspace --all-targets --all-features --offline -- -D warnings` | 通过（0 警告；**且构建输出无 manifest 警告**） |
 | `cargo test --workspace --all-features --offline` | **149 passed / 0 failed** |
-| `pwsh -File tools/check-consistency.ps1` | `passed=177 failed=0 total=177` |
+| `pwsh -File tools/check-consistency.ps1` | `passed=178 failed=0 total=178` |
 | `powershell -File tools/check-consistency.ps1`（PS 5.1） | 同上（与 PS 7 同结果） |
 | `pwsh -File tools/gen-facts.ps1 -Check` | FACTS.json 与实测一致 |
 | `pwsh -File tools/verify-version.ps1 -Exe .\DSHLauncher.exe -RequireInstaller` | **33 passed / 0 skipped / 0 failed** |

@@ -685,6 +685,11 @@ Test-FileExists 'ui/settings.html'            '设置页'
 Test-FileExists 'ui/guide.html'               '新手指引页'
 Test-FileExists 'crates/dsh-app/build.rs'     '图标嵌入构建脚本'
 Test-FileExists 'crates/dsh-core/examples/job_object_demo.rs' 'Job Object 验证程序'
+# make-icon.ps1 的**唯一数据源**：缺失时 make-icon 直接 throw，于是 build.ps1 / build-setup.ps1
+# 会在第一步失败（而 finish-release 只记退出码，看不到子进程输出）。
+# 本轮实测踩到：清理"旧版遗留资产"时误把它当零引用文件删掉 —— 当时门禁**没有**这条断言，
+# 所以删完没有任何红灯。根因与恢复手法见 docs/OPS-RUNBOOK.md §7.7。
+Test-FileExists 'assets/whale-path.txt'       '图标数据源（make-icon.ps1 的唯一输入）'
 
 # ---------------------------------------------------------------------------
 # 5b. 自检脚本的判据必须与产品**实际**行为对齐
