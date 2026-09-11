@@ -364,6 +364,38 @@ docs/OPS-RUNBOOK.md                     发布/维护操作手册（含真实事
 docs/MAINTENANCE.zh.md / .en.md         dsh 升级与维护手册
 ```
 
+## 文档地图
+
+15 份文档按**用途**分三类 —— 需要什么就读对应那一份，不必通读：
+
+| 文档 | 用途 | 什么时候读 |
+|---|---|---|
+| [`README.md`](README.md)（本文） | 用户入口：安装 / 使用 / 构建 / 卸载 / 自检 | 第一次接触 |
+| [`docs/RELEASE_NOTES_v5.0.0.md`](docs/RELEASE_NOTES_v5.0.0.md) | 本版**用户可见**变更（中英） | 想知道"这版改了什么" |
+| [`docs/MAINTENANCE.zh.md`](docs/MAINTENANCE.zh.md) · [`en`](docs/MAINTENANCE.en.md) | dsh 升级与维护手册（含故障排查） | dsh 出问题 / 要升级 dsh |
+| [`docs/OPS-RUNBOOK.md`](docs/OPS-RUNBOOK.md) | 发布与运维手册 + **事故记录**（含恢复步骤与预防规则） | 发版 / 排查环境问题 |
+| [`docs/TECHNICAL-ROADMAP.md`](docs/TECHNICAL-ROADMAP.md) | 设计与决策档案（§0–§12）+ 实施记录（§13–§15） | 想理解"为什么这样设计" |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | 版本历史（v1–v5，中英） | 对比版本差异 |
+
+**证据档案**（按轮次留痕，**不必通读**，排查具体问题时按需查）：
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/AUDIT-REPORT-v5.0.0.md`](docs/AUDIT-REPORT-v5.0.0.md) | v5.0.0 定稿前的审计问题总表 |
+| [`docs/IMPLEMENTATION-v5.0.0.md`](docs/IMPLEMENTATION-v5.0.0.md) · [`-prev-round`](docs/IMPLEMENTATION-v5.0.0-prev-round.md) · [`-lts-final`](docs/IMPLEMENTATION-v5.0.0-lts-final.md) | 各轮的逐项处置记录（问题 → 方案 → 结果） |
+| [`docs/RELEASE-VERIFICATION-v5.0.0-LTS.md`](docs/RELEASE-VERIFICATION-v5.0.0-LTS.md) | 五轮发布验证证据（§1–§11，含"验证中发现的缺陷"与"失效结论更正"） |
+| [`docs/CFT-FEEDBACK.md`](docs/CFT-FEEDBACK.md) | 待提交给上游 Cargo 的反馈草稿 |
+
+**生成物 / 工具数据（勿手改）**：
+
+| 文件 | 说明 |
+|---|---|
+| [`docs/FACTS.json`](docs/FACTS.json) | 文档数字的**唯一来源**，由 `tools/gen-facts.ps1` 实测生成；`-Check` 拦截漂移 |
+| [`docs/FINISH-REPORT.md`](docs/FINISH-REPORT.md) | 每次 `tools/finish-release.ps1` 生成 |
+
+> **数字口径**：README / CHANGELOG / 路线图 / 发布说明里的单元测试数、一致性项数、产物体积
+> **一律以 `FACTS.json` 为准** —— 改完代码跑 `pwsh tools\gen-facts.ps1` 同步，`-Check` 会告诉你哪里漂了。
+
 ## 技术栈
 
 - **GUI**：`wry`（WebView2 COM 直连）+ `tao`（窗口与事件循环）
@@ -613,6 +645,31 @@ removal of the install directory itself is performed by a copy of the uninstalle
 `%TEMP%`; that copy is removed by the OS **at the next reboot** (measured: requesting `DELETE` access
 to one's own image is denied — a platform limitation, not an oversight). Every uninstall also sweeps
 away stale copies left in `%TEMP%` by earlier runs.
+
+## Documentation map
+
+Fifteen documents, grouped by purpose — read only the one you need:
+
+| Document | Purpose | When |
+|---|---|---|
+| [`README.md`](README.md) (this file) | User entry: install / use / build / uninstall / self-test | First contact |
+| [`docs/RELEASE_NOTES_v5.0.0.md`](docs/RELEASE_NOTES_v5.0.0.md) | **User-visible** changes in this release (zh + en) | "What changed?" |
+| [`docs/MAINTENANCE.en.md`](docs/MAINTENANCE.en.md) · [`zh`](docs/MAINTENANCE.zh.md) | dsh upgrade & maintenance guide (incl. troubleshooting) | dsh breaks / upgrading dsh |
+| [`docs/OPS-RUNBOOK.md`](docs/OPS-RUNBOOK.md) | Release & ops runbook + **incident records** (recovery steps, prevention rules) | Publishing / environment issues |
+| [`docs/TECHNICAL-ROADMAP.md`](docs/TECHNICAL-ROADMAP.md) | Design & decision archive (§0–§12) + implementation records (§13–§15) | "Why is it built this way?" |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Version history (v1–v5, zh + en) | Comparing versions |
+
+**Evidence archive** (append-only per round — no need to read in full; look things up as needed):
+[`AUDIT-REPORT-v5.0.0.md`](docs/AUDIT-REPORT-v5.0.0.md) (audit findings),
+[`IMPLEMENTATION-v5.0.0.md`](docs/IMPLEMENTATION-v5.0.0.md) + [`-prev-round`](docs/IMPLEMENTATION-v5.0.0-prev-round.md)
++ [`-lts-final`](docs/IMPLEMENTATION-v5.0.0-lts-final.md) (per-round disposition logs),
+[`RELEASE-VERIFICATION-v5.0.0-LTS.md`](docs/RELEASE-VERIFICATION-v5.0.0-LTS.md) (five rounds of release
+evidence, including defects found while verifying and corrected conclusions),
+[`CFT-FEEDBACK.md`](docs/CFT-FEEDBACK.md) (draft feedback for upstream Cargo).
+
+**Generated / tool data — do not edit by hand**: [`FACTS.json`](docs/FACTS.json) is the **single source
+of truth** for the numbers quoted in the docs (produced by `tools/gen-facts.ps1`; `-Check` fails on drift);
+[`FINISH-REPORT.md`](docs/FINISH-REPORT.md) is written by `tools/finish-release.ps1` on every run.
 
 ## Tech Stack
 
