@@ -88,6 +88,54 @@ function Wait-ProcessWithTimeout($proc, [int]$timeoutMs, [string]$failId) {
     return $proc.ExitCode
 }
 
+# 挑一个真正空闲的端口（C 段用：让启动器**自己拉起**服务，才能读到一次性 token）
+function Get-FreePort {
+    $listener = New-Object System.Net.Sockets.TcpListener -ArgumentList @([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $free = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $listener.Stop()
+    return $free
+}
+
+# C 段会临时改写**用户真实配置**（把端口指向隔离端口）。这两个函数负责还原与清理，
+# 幂等且在任何路径（正常 / 异常 / 被取消）下都要能安全调用。
+function Restore-CConfig {
+    if ([string]::IsNullOrEmpty($script:cCfgPath)) { return }
+    if ($script:cCfgExisted) {
+        Set-Content -Path $script:cCfgPath -Value $script:cCfgBackup -NoNewline -Encoding UTF8
+    } elseif (Test-Path $script:cCfgPath) {
+        Remove-Item $script:cCfgPath -Force -ErrorAction SilentlyContinue
+    }
+    $script:cCfgPath = ''
+}
+
+function Stop-CService {
+    if ($script:cPort -le 0) { return }
+    # ① 优先按**启动器日志里记下的 PID** 杀：探针退出时服务可能才刚 spawn、还没开始监听，
+    #    只查"此刻是否在监听"会扑空，留下一个常驻 dsh（本轮实测泄漏了 4120 / 63084 两个）。
+    if ($script:cSpawnedPid -gt 0 -and (Get-Process -Id $script:cSpawnedPid -ErrorAction SilentlyContinue)) {
+        Kill-Tree $script:cSpawnedPid
+    }
+    # ② 兜底：该端口是我们刚挑出来的空闲端口 ⇒ 出现监听者必然是本段自己拉起的服务。
+    #    给它最多 5 秒时间起来（spawn 到监听之间有一个窗口），起来就杀，没起来就说明本来就没起。
+    for ($i = 0; $i -lt 20; $i++) {
+        $conn = @(Get-NetTCPConnection -LocalPort $script:cPort -State Listen -ErrorAction SilentlyContinue)
+        if ($conn.Count -gt 0) {
+            foreach ($x in @($conn.OwningProcess | Select-Object -Unique)) { Kill-Tree $x }
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    $script:cPort = 0
+    $script:cSpawnedPid = 0
+}
+
+$script:cPort = 0          # C 段的隔离端口（0 = 未使用）
+$script:cSpawnedPid = 0    # C 段启动器自己拉起并写进日志的 dsh PID（用于可靠回收）
+$script:cCfgPath = ''      # 被改写的配置路径（空 = 无需还原）
+$script:cCfgExisted = $false
+$script:cCfgBackup = $null
+
 $script:demoTempFiles = New-Object System.Collections.Generic.List[string]
 $script:demoPids = New-Object System.Collections.Generic.List[int]
 
@@ -278,37 +326,69 @@ try {
             Add-Failure "C-build" "未找到 $appExe"
         } else {
             $log = Join-Path $env:LOCALAPPDATA "DSHLauncher\logs\launcher.log"
+
+            # ------------------------------------------------------------------
+            # 隔离端口（本轮修复，与 E 段同一套路）
+            #
+            # 旧实现直接用**用户真实配置**跑探针：若该端口上已有**外部** dsh（很常见：用户自己
+            # 开着的会话），启动器读不到它的一次性 token，而本机 WebView2 里也可能没有可用 cookie
+            # ⇒ 内嵌页返回 401 ⇒ 认证自愈按设计**弹窗询问**用户 ⇒ 无头探针无人应答 ⇒ 挂满 180s
+            # 超时。实测：清空 WebView2 profile 后 C 段必然如此（任何"新克隆 + 本机有 dsh 在跑"
+            # 的环境也一样）。改为：临时把配置指向一个**空闲端口**，让启动器自己 spawn 服务 ⇒
+            # 能读到 token ⇒ 页面正常加载 ⇒ IPC 往返可判；跑完**原样还原**用户配置。
+            # ------------------------------------------------------------------
+            $script:cPort = Get-FreePort
+            $cfg = Join-Path $env:APPDATA 'DSHLauncher\settings.toml'
+            $script:cCfgPath = $cfg
+            $script:cCfgExisted = Test-Path $cfg
+            if ($script:cCfgExisted) { $script:cCfgBackup = Get-Content $cfg -Raw }
+            $cfgDir = Split-Path -Parent $cfg
+            if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
+            Set-Content -Path $cfg -Value ("port = {0}`n" -f $script:cPort) -Encoding UTF8
+            Write-Host ("  隔离端口: {0}（让启动器自建服务以取得 token；跑完还原用户配置）" -f $script:cPort)
+
             $marker = if (Test-Path $log) { (Get-Content $log | Measure-Object -Line).Lines } else { 0 }
+            try {
+                Write-Host "  运行 $appExe --ipc-probe（最长 180 秒）..."
+                # 同样：取真实退出码 + 有界等待（GUI 子系统进程用 `&` 不等待，
+                # 会在它仍持有互斥体时就往下跑；-Wait 则会永久挂住）
+                $proc = Start-Process -FilePath $appExe -ArgumentList '--ipc-probe' -PassThru
+                $code = Wait-ProcessWithTimeout $proc 180000 'C-timeout'
+                Start-Sleep -Milliseconds 300
 
-            Write-Host "  运行 $appExe --ipc-probe（最长 180 秒）..."
-            # 同样：取真实退出码 + 有界等待（GUI 子系统进程用 `&` 不等待，
-            # 会在它仍持有互斥体时就往下跑；-Wait 则会永久挂住）
-            $proc = Start-Process -FilePath $appExe -ArgumentList '--ipc-probe' -PassThru
-            $code = Wait-ProcessWithTimeout $proc 180000 'C-timeout'
-            Start-Sleep -Milliseconds 300
+                $newLines = if (Test-Path $log) { Get-Content $log | Select-Object -Skip $marker } else { @() }
+                $txt = $newLines -join "`n"
 
-            $newLines = if (Test-Path $log) { Get-Content $log | Select-Object -Skip $marker } else { @() }
-            $txt = $newLines -join "`n"
+                # 记下启动器**自己拉起**的服务 PID（finally 里据此可靠回收，不依赖"此刻在监听"）
+                $spawnMatch = [regex]::Match($txt, 'dsh web 已启动（PID (\d+)')
+                if ($spawnMatch.Success) { $script:cSpawnedPid = [int]$spawnMatch.Groups[1].Value }
 
-            # P2-3：探针自身退出码必须为 0，否则「日志里恰好有那两行」不能算通过
-            if ($null -eq $code) {
-                Write-Host "  FAIL: --ipc-probe 超时（见 C-timeout）" -ForegroundColor Red
-            } elseif ($code -eq 2) {
-                Add-InstanceConflict "C-exit" "探针退出码 2（互斥体被占用，IPC 结论不可信）"
-            } elseif ($code -ne 0) {
-                Add-Failure "C-exit" "探针退出码 $code（应为 0，IPC 结论不可信）"
-            }
+                # P2-3：探针自身退出码必须为 0，否则「日志里恰好有那两行」不能算通过
+                if ($null -eq $code) {
+                    Write-Host "  FAIL: --ipc-probe 超时（见 C-timeout）" -ForegroundColor Red
+                } elseif ($code -eq 2) {
+                    Add-InstanceConflict "C-exit" "探针退出码 2（互斥体被占用，IPC 结论不可信）"
+                } elseif ($code -ne 0) {
+                    Add-Failure "C-exit" "探针退出码 $code（应为 0，IPC 结论不可信）"
+                }
 
-            if ($null -ne $code -and $code -eq 0 -and $txt -match "设置页命令: Save") {
-                Write-Host "  PASS: 页面按钮命令已抵达 Rust 后端 ✓" -ForegroundColor Green
-            } else {
-                Add-Failure "C-ipc" "未收到设置页命令（IPC 通道未打通；退出码 $code）"
-            }
-            # 采纳已有服务时也应打开内嵌窗口（曾出现过"接管分支不开窗"的缺陷）
-            if ($null -ne $code -and $code -eq 0 -and $txt -match "已打开内嵌界面") {
-                Write-Host "  PASS: 内嵌窗口已打开 ✓" -ForegroundColor Green
-            } else {
-                Add-Failure "C-open" "未打开内嵌窗口（退出码 $code）"
+                if ($null -ne $code -and $code -eq 0 -and $txt -match "设置页命令: Save") {
+                    Write-Host "  PASS: 页面按钮命令已抵达 Rust 后端 ✓" -ForegroundColor Green
+                } else {
+                    Add-Failure "C-ipc" "未收到设置页命令（IPC 通道未打通；退出码 $code）"
+                }
+                # 探针按分支打开**设置窗口**（端口空闲 ⇒ 自建服务）或**内嵌界面**（接管已有服务）：
+                # 两者都证明"窗口确实打开了"（曾出现过"接管分支不开窗"的缺陷，故必须断言）。
+                # 旧实现只认「已打开内嵌界面」，于是在自建服务分支下**必然假失败**（本轮实测）。
+                if ($null -ne $code -and $code -eq 0 -and ($txt -match "已打开内嵌界面" -or $txt -match "已打开设置窗口")) {
+                    Write-Host "  PASS: 内嵌窗口已打开 ✓" -ForegroundColor Green
+                } else {
+                    Add-Failure "C-open" "未打开内嵌窗口（退出码 $code）"
+                }
+            } finally {
+                # 无论成功/失败/异常：还原用户配置并回收本段拉起的服务
+                Restore-CConfig
+                Stop-CService
             }
         }
     }
@@ -366,6 +446,9 @@ try {
     foreach ($p in $script:demoPids) {
         if ($p -and (Get-Process -Id $p -ErrorAction SilentlyContinue)) { Kill-Tree $p }
     }
+    # C 段的兜底（幂等）：即使 C 段自身抛异常或被中断，也要把用户配置还原、把自建服务回收
+    Restore-CConfig
+    Stop-CService
 }
 
 # ---------------------------------------------------------------------------

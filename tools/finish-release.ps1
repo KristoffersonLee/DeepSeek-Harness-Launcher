@@ -271,6 +271,32 @@ Step '3. build-setup.ps1（安装包）' {
 }
 
 # ---------------------------------------------------------------------------
+# 3b. 安装包内嵌一致性（**逐字节**；必须用 PowerShell 5.1 运行）
+#
+# 为什么单独一步（本轮实测盲区）：`verify-version.ps1` 只校验版本资源与"内嵌了卸载器"这类
+# **存在性**事实，`check-consistency.ps1` 只看源码文本 —— 没有任何既有校验能发现
+# "安装包内嵌的 README 是旧的"。实测踩到：给 README 加完「文档地图」没有再打包，
+# 上面的校验**全绿**，而用户装出来的 README 是旧的。
+# 因此这里把 6 项内嵌资源逐个与磁盘产物做 SHA256 比对。
+# 必须用 `powershell`（5.1）：安装包是 .NET Framework 程序集，pwsh（.NET 8）加载不了它。
+# ---------------------------------------------------------------------------
+Step '3b. verify-embedded.ps1（安装包内嵌资源 == 当前产物）' {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'verify-embedded.ps1') 2>&1 |
+        ForEach-Object { Write-Host $_ }
+    $code = $LASTEXITCODE
+    if ($code -eq 0) {
+        Record '3b. PASS: 安装包内嵌 6 项资源与当前产物逐字节一致'
+    } elseif ($code -eq 2) {
+        # 明确区分"没验"与"验过"：前置条件缺失按失败记账
+        Record '3b. FAIL: 前置条件缺失（校验未执行，不等于通过）'
+        Add-Failure '3b. verify-embedded.ps1 退出码 2（校验未执行）'
+    } else {
+        Record ("3b. FAIL: verify-embedded.ps1 退出码 {0}" -f $code)
+        Add-Failure ("3b. verify-embedded.ps1 退出码 $code")
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 4. 静态与测试验收
 # ---------------------------------------------------------------------------
 Step '4. cargo fmt --check' {

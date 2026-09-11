@@ -691,6 +691,24 @@ Test-FileExists 'crates/dsh-core/examples/job_object_demo.rs' 'Job Object 验证
 # 所以删完没有任何红灯。根因与恢复手法见 docs/OPS-RUNBOOK.md §7.7。
 Test-FileExists 'assets/whale-path.txt'       '图标数据源（make-icon.ps1 的唯一输入）'
 
+# 安装包内嵌一致性校验（本轮新增的盲区防线）
+#
+# 背景：`verify-version.ps1` 只校验"安装包内嵌了卸载器"这类**存在性**事实，没有任何校验比对
+# **字节** —— 实测踩到：给 README 加完「文档地图」没有再打包，安装包内嵌的仍是旧 README
+# （41,763 B vs 46,086 B），而当时所有校验全绿，用户装出来的 README 是旧的。
+# 这里钉住三件事：脚本存在、被发布流程调用、且确实做 SHA256 逐字节比对（并用 5.1 跑，
+# 因为安装包是 .NET Framework 程序集）。
+$embScript = Read-Text 'tools/verify-embedded.ps1'
+$finishRs = Read-Text 'tools/finish-release.ps1'
+if ($null -ne $embScript -and $embScript -match 'GetManifestResourceStream' -and
+    $embScript -match 'Get-FileHash' -and $embScript -match 'SHA256' -and
+    $null -ne $finishRs -and $finishRs -match 'verify-embedded\.ps1' -and
+    $finishRs -match 'powershell -NoProfile') {
+    Add-Pass '安装包内嵌一致性校验存在且接线（逐字节 SHA256 比对，经 PowerShell 5.1 运行）'
+} else {
+    Add-Issue '缺少/未接线「安装包内嵌资源 == 当前产物」的逐字节校验（旧产物会被静默装出去）'
+}
+
 # ---------------------------------------------------------------------------
 # 5b. 自检脚本的判据必须与产品**实际**行为对齐
 #

@@ -522,7 +522,7 @@ DRY-RUN：以上为完整影响范围；未改动任何内容。
 | `cargo fmt --all -- --check` | 通过（exit 0；新 rustfmt **无格式漂移**） |
 | `cargo clippy --workspace --all-targets --all-features --offline -- -D warnings` | 通过（0 警告；**且构建输出无 manifest 警告**） |
 | `cargo test --workspace --all-features --offline` | **149 passed / 0 failed** |
-| `pwsh -File tools/check-consistency.ps1` | `passed=178 failed=0 total=178` |
+| `pwsh -File tools/check-consistency.ps1` | `passed=179 failed=0 total=179` |
 | `powershell -File tools/check-consistency.ps1`（PS 5.1） | 同上（与 PS 7 同结果） |
 | `pwsh -File tools/gen-facts.ps1 -Check` | FACTS.json 与实测一致 |
 | `pwsh -File tools/verify-version.ps1 -Exe .\DSHLauncher.exe -RequireInstaller` | **33 passed / 0 skipped / 0 failed** |
@@ -533,3 +533,46 @@ DRY-RUN：以上为完整影响范围；未改动任何内容。
 > 回退方法（**一条命令、无需改源码**）：`Remove-Item rust-toolchain.toml` —— 之后 `cargo` 立刻回到
 > stable 1.98.1（旧布局）。完整步骤、升级钉死版本的检查清单、以及与上游稳定化的关系见
 > [`OPS-RUNBOOK.md`](OPS-RUNBOOK.md) §8。
+
+---
+
+## 12. 上传前一致性核对（2026-09-12）
+
+推送仓库前做全链路一致性核对（"新布局的安装包/卸载包是否都吃到最新更新、版本号是否同源"），
+发现并修掉**两处**既有校验都覆盖不到的问题。
+
+### 12.1 安装包内嵌资源陈旧（打包盲区）
+
+| 链路 | 结果 |
+|---|---|
+| **安装包内嵌资源 ↔ 当前产物** | ❌ → ✅ **6 项逐字节一致**（修复前内嵌的 `README.md` 是旧版：41,763 B vs 46,086 B） |
+| 根产物 ↔ `target\release` | ✅ 同一构建（哈希相同） |
+| 产物 ↔ 源码 | ✅ 产物时间戳**晚于全部构建输入**（无陈旧） |
+| 版本链路 | ✅ `Cargo.toml` / `Cargo.lock` 5.0.0 · 启动器/卸载器 5.0.0 · 安装包 5.0.0.0 · 标记 `version=<AppVersion> LTS` · 注册表 7 值同源 · `--version` = `DSHLauncher 5.0.0 LTS (release)` · `--build-info` 16 个修复标记 |
+| 载荷清单 | ✅ 安装器 ↔ 卸载器逐项一致（6 项）；源码无陈旧版本字面量 |
+
+**盲区**：`verify-version.ps1` 只验证"安装包内嵌了卸载器"这类**存在性**事实，`check-consistency.ps1`
+只看源码文本 —— 没有任何校验比对**字节**。于是"给 README 加完「文档地图」却没重新打包"这种状态
+让所有校验**全绿**，而用户装出来的 README 是旧的。
+
+**修复**：新增 [`tools/verify-embedded.ps1`](../tools/verify-embedded.ps1)（PS 5.1 反射抽取 6 项
+.NET 内嵌资源 + SHA256 逐字节比对；带 `-Root`/`-Setup` 以便正负用例，实测正例 0 / 负例 1 / 跳过 2），
+挂进 `finish-release.ps1` **第 3b 步**；门禁新增 1 条断言（178 → **179**）。
+**即时验证**：改完文档计数后（README 长度不变、内容已变）该工具**立刻报 FAIL**，
+证明它抓的是字节而不是尺寸。
+
+### 12.2 自检 C 段在"外部会话 + 无 cookie"环境下挂死（自检缺陷）
+
+C 段直接用**用户真实配置**跑 `--ipc-probe`：端口上已有外部 dsh 时读不到 token、profile 里又没有
+cookie ⇒ 内嵌页 401 ⇒ 认证自愈按设计弹窗询问 ⇒ 无头探针无人应答 ⇒ **挂满 180 s**（实测两次复现）。
+改为与 E 段同套路：**临时空闲端口 + 备份/逐字节还原用户配置 + 按日志 PID 回收自建服务**；
+并修正 `C-open` 断言（自建服务分支的日志是「已打开设置窗口。」，旧断言只认接管分支的
+「已打开内嵌界面」，必然假失败）。
+
+**修复后实测**：`selftest.ps1` **全部 PASS（exit 0）**，用户配置**逐字节还原**（140 → 140 字符），
+3099 上的活动会话全程未受影响，且**无服务泄漏**（除 3099 外无 dsh 监听）。
+
+### 12.3 本轮发布流程
+
+`pwsh -File tools/finish-release.ps1`：**全部步骤通过**（含新增的 3b 与修正后的 10），
+报告见 [`FINISH-REPORT.md`](FINISH-REPORT.md)。

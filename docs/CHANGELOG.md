@@ -4,6 +4,44 @@
 
 ---
 
+<a name="v500-preupload-2026-09-12"></a>
+## v5.0.0 LTS · 上传前一致性核对（2026-09-12）：安装包内嵌旧 README + 常设校验
+
+> 🏷 **版本不变**：`5.0.0`。推送仓库前做全链路一致性核对，发现并修掉一处**所有既有校验都
+> 覆盖不到的**问题，并把它变成常设校验。
+
+| 链路 | 结果 |
+|---|---|
+| 安装包内嵌资源 ↔ 当前产物 | ❌ → ✅ **6 项逐字节一致**（修复前内嵌的 README 是旧版：41,763 B vs 46,086 B） |
+| 根产物 ↔ `target\release` | ✅ 同一构建（哈希相同） |
+| 产物 ↔ 源码 | ✅ 产物时间戳晚于全部构建输入（无陈旧） |
+| 版本链路 | ✅ `Cargo.toml` / `Cargo.lock` 5.0.0 → 启动器/卸载器 5.0.0 → 安装包 5.0.0.0 → 标记 `version=<AppVersion> LTS` → 注册表 7 值同源 → `--version` |
+| 载荷清单 | ✅ 安装器 ↔ 卸载器逐项一致（6 项） |
+
+**盲区与修复**：`verify-version.ps1` 只校验"安装包内嵌了卸载器"这类**存在性**事实，
+`check-consistency.ps1` 只看源码文本 —— 没有任何校验比对**字节**。于是"给 README 加完
+「文档地图」却没重新打包"这种状态会让所有校验**全绿**，而用户装出来的 README 是旧的。
+新增 [`tools/verify-embedded.ps1`](../tools/verify-embedded.ps1)：用 **PowerShell 5.1** 反射抽取
+6 项 .NET 内嵌资源，与磁盘产物做 SHA256 比对（安装包是 .NET Framework 程序集，pwsh 加载不了它）；
+它带 `-Root` / `-Setup` 参数以便做**正负用例**（夹具里改一处副本 ⇒ 必须报 FAIL，实测 exit 1；
+缺安装包 ⇒ exit 2，明确区分"没验"与"验过"）。已挂进 `finish-release.ps1` **第 3b 步**，
+前置条件缺失按失败记账。门禁因此新增 1 条断言：**178 → 179**。
+
+**产物尺寸变化**：安装包 1,637,376 → **1,641,472 B**（差值即 README 新增的「文档地图」）；
+启动器 1,087,488 B 与卸载器 316,928 B **不变**。`FACTS.json` 已按实测重生成。
+
+**同一轮顺手修掉的自检缺陷（C 段）**：`selftest.ps1` 的 C 段（设置页 IPC 往返）此前直接用
+**用户真实配置**跑 `--ipc-probe`。若该端口上已有**外部** dsh（很常见：用户自己开着的会话），
+启动器读不到它的一次性 token、本机 WebView2 里也可能没有可用 cookie ⇒ 内嵌页 401 ⇒ 认证自愈
+按设计**弹窗询问** ⇒ 无头探针无人应答 ⇒ **挂满 180 秒超时**（实测两次复现；清空 WebView2 profile
+后必然如此，任何"新克隆 + 本机有 dsh 在跑"的环境同样如此）。改为与 E 段同一套路：
+**临时指向一个空闲端口 + 备份/逐字节还原用户配置 + 按日志 PID 回收自建服务**（含 5 秒兜底，
+避免"探针退出时服务还没开始监听"造成的常驻泄漏 —— 本轮实测泄漏过两个 dsh）。同时修正
+`C-open` 断言：它只认接管分支的「已打开内嵌界面」，在自建服务分支下**必然假失败**
+（该分支日志是「已打开设置窗口。」），现两者都接受。
+
+---
+
 <a name="v500-lts-toolchain-2026-09-12"></a>
 ## v5.0.0 LTS · 工具链迁移轮（2026-09-12）：主工具链切到 nightly + build-dir Layout v2
 
@@ -46,7 +84,7 @@
 事故记录与预防规则见 [`OPS-RUNBOOK.md`](OPS-RUNBOOK.md) §7.7。
 
 **本轮验证**：`fmt --check` 0 · `clippy -D warnings` 0（**且构建输出无 manifest 警告**）·
-单测 **149/149** · 一致性门禁 **178/178**（PS 5.1 与 PS 7 同结果）· 版本链路 **33/0/0** ·
+单测 **149/149** · 一致性门禁 **179/179**（PS 5.1 与 PS 7 同结果）· 版本链路 **33/0/0** ·
 `gen-facts -Check` 一致 · 模拟安装 dry-run PASS · `verify-build-layout.ps1 -Run -IncludeNightly` 通过 ·
 `selftest.ps1` A1/A2/B/C/D/E 全部 PASS · `finish-release.ps1` **14 步全通过**（含 cargo-audit 与
 cargo-machete，见 [`FINISH-REPORT.md`](FINISH-REPORT.md)）。
@@ -123,7 +161,7 @@ cargo-machete，见 [`FINISH-REPORT.md`](FINISH-REPORT.md)）。
 重复执行返回 `0` 并报告"没有注册表残留"。门禁新增 7 条断言（模式存在、帮助文本、零文件系统
 变更、三值印证、护栏复用、dry-run、快捷方式匹配规则单一实现）。
 
-**验证摘要**（详细见发布验证记录）：单元测试 **149**（`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 21 · `dsh-buildinfo` 6）；一致性门禁 **178/178**（PS 5.1 与 PS 7 同结果）；`clippy --all-targets --all-features -D warnings` **0 警告**；`cargo fmt --check` **通过**；依赖审计（OSV 通道）**Windows 构建图内 0 漏洞**（`glib` / `proc-macro-error` 均仅在非 Windows 依赖图中）。
+**验证摘要**（详细见发布验证记录）：单元测试 **149**（`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 21 · `dsh-buildinfo` 6）；一致性门禁 **179/179**（PS 5.1 与 PS 7 同结果）；`clippy --all-targets --all-features -D warnings` **0 警告**；`cargo fmt --check` **通过**；依赖审计（OSV 通道）**Windows 构建图内 0 漏洞**（`glib` / `proc-macro-error` 均仅在非 Windows 依赖图中）。
 
 ---
 
@@ -388,7 +426,7 @@ cargo-machete，见 [`FINISH-REPORT.md`](FINISH-REPORT.md)）。
 | 指标 | 重构初版 | 当前（5.0.0 LTS） |
 |---|---|---|
 | 单元测试 | 65 | **149** |
-| 一致性校验项 | 66 | **178** |
+| 一致性校验项 | 66 | **179** |
 | 版本链路项 | 23 | **28** |
 | 启动器工作集（窗口关闭态） | 23.9 MB（另一口径） | **13.2 MB**（同口径实测） |
 | 冷启动「就绪 vs token」 | 未测（缺陷未暴露） | **就绪早 914 ms**，由 `Ready{url:None}` + 补发覆盖 |
@@ -677,7 +715,7 @@ Finalisation round — verification & tooling (new):
 | Metric | Initial rewrite | Finalisation round |
 |---|---|---|
 | Unit tests | 65 | **149** |
-| Consistency checks | 66 | **178** |
+| Consistency checks | 66 | **179** |
 | Version-chain checks | 23 | **28** |
 | Launcher working set (window closed) | 23.9 MB (a different measurement basis) | **13.2 MB** (same basis) |
 | Cold-start "ready vs token" ordering | not measured (defect not yet exposed) | ready arrives **914 ms earlier** → covered by `Ready{url:None}` + re-emit |

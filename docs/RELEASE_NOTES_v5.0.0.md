@@ -331,7 +331,7 @@ runtime verification evidence.
 
 - dsh ≥ 0.1.5（任意 dist-tag 通道）；Windows 10/11 64 位；WebView2 Runtime
   （缺失时自动回退 **Edge 精简窗口**，再回退默认浏览器）
-- 构建需要：**由 [`rust-toolchain.toml`](../rust-toolchain.toml) 钉死的 `nightly-2026-09-10`**
+- 构建需要：**由 [`rust-toolchain.toml`](https://github.com/KristoffersonLee/DeepSeek-Harness-Launcher/blob/main/rust-toolchain.toml) 钉死的 `nightly-2026-09-10`**
   （含 `clippy` / `rustfmt`；`rustup` 会在首次构建时自动安装）+ Windows SDK（`rc.exe` 用于内嵌图标）。
   构建缓存采用 Cargo **build-dir Layout v2**；回退到 stable 只需删除该文件 —— 见
   [`OPS-RUNBOOK.md`](OPS-RUNBOOK.md) §8
@@ -347,17 +347,19 @@ runtime verification evidence.
 - 文档 / Docs：`README.md` · `docs/TECHNICAL-ROADMAP.md` · `docs/CHANGELOG.md` ·
   `docs/MAINTENANCE.zh.md` / `MAINTENANCE.en.md` · 本文件
 - 校验工具 / Verification：`selftest.ps1`（A1/A2/B/C/D/E）·
-  `tools/check-consistency.ps1`（31 项）· `tools/verify-monitor.ps1` · `tools/verify-icon.ps1`
+  `tools/check-consistency.ps1`（**179 项**）· `tools/verify-version.ps1` · `tools/verify-embedded.ps1`
+  （安装包内嵌资源与产物逐字节比对）· `tools/verify-monitor.ps1` · `tools/verify-icon.ps1` ·
+  `tools/finish-release.ps1`（一键发布：15 步全通过）
 
 ### 🔒 依赖安全审计
 
-发布前对 `Cargo.lock` 做了全量漏洞扫描（`cargo audit` 所需的 GitHub advisory-db 在本机网络不可达，
-改用等价的 OSV 通道：`tools/osv-audit.ps1`，数据同为 RustSec 镜像）：
+发布前对 `Cargo.lock` 做了全量漏洞扫描（`cargo audit`，advisory-db 1243 条；离线环境可用等价的
+OSV 通道 `tools/osv-audit.ps1`，数据同为 RustSec 镜像）：
 
 | 范围 | 包数 | 漏洞记录 | 结论 |
 |---|---|---|---|
-| **Windows 构建图（真正进 exe）** | **104** | **0** | ✅ 无 |
-| 全平台 lockfile | 264 | 3（`glib 0.18.5` ×2、`proc-macro-error 1.0.4`） | ⚪ 均属 Linux 专用 GTK 栈 |
+| **Windows 构建图（真正进 exe）** | **138** | **0** | ✅ 无 |
+| 全平台 lockfile | 266 | 3（`glib 0.18.5` ×2、`proc-macro-error 1.0.4`） | ⚪ 均属 Linux 专用 GTK 栈 |
 
 这 3 条记录来自 `tao` 在 **Linux** 上默认启用的 GTK 栈
 （`gtk → glib → glib-macros → proc-macro-error`），本项目已声明

@@ -249,7 +249,7 @@ powershell -ExecutionPolicy Bypass -File selftest.ps1 -SkipE2E
 ## 一致性校验
 
 校验路线图中的硬约束是否被破坏（版本同源、安装/卸载互逆、禁用依赖、分层纯净、
-LAN 无残留、feature 修正等，共 178 项）：
+LAN 无残留、feature 修正等，共 179 项）：
 
 ```powershell
 pwsh -NoProfile -File tools\check-consistency.ps1     # 源码与配置一致性
@@ -349,7 +349,7 @@ ui/guide.html                           新手指引页（内嵌进 exe，唯一
 build.ps1 / build-setup.ps1             构建脚本（build.ps1 支持热替换发布 + 清理历史产物）
 selftest.ps1                            自检脚本（A1 / A2 / B / C / D / E）
 tools/verify-deployed.ps1               校验根产物修复标记 + 运行实例确有窗口且不 hung
-tools/check-consistency.ps1             一致性校验（178 项，含行为性硬约束）
+tools/check-consistency.ps1             一致性校验（179 项，含行为性硬约束）
 tools/verify-version.ps1                版本链路一致性校验（Cargo → exe 资源 → 安装包 → 卸载器）
 tools/verify-service-lifecycle.ps1      服务独立性验证（含 -Force 判决性实验）
 tools/verify-token-navigation.ps1       token 导航验证（静态 + HTTP 事实 + 日志断言）
@@ -570,7 +570,7 @@ Exit codes: `0` success · `1` self-test failed · `2` an existing instance bloc
 ## Consistency check
 
 ```powershell
-pwsh -NoProfile -File tools\check-consistency.ps1      # 178 source/config invariants
+pwsh -NoProfile -File tools\check-consistency.ps1      # 179 source/config invariants
 pwsh -NoProfile -File tools\verify-version.ps1         # version chain: Cargo → exe resource → installer → uninstaller
 pwsh -NoProfile -File tools\gen-facts.ps1 -Check       # docs' numbers match measured reality
 pwsh -NoProfile -File tools\verify-service-lifecycle.ps1
