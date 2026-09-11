@@ -322,6 +322,37 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File build-setup.ps1     # 安装包
 - 升级安装会清理**上一版遗留的载荷**（`ObsoletePayloads`：旧的 `uninstall.cmd`/`uninstall.ps1`），
   避免新旧两套卸载器并存。
 
+- **安装目录已被删除（悬空残留）**：此时三条正规入口全部失效 —— 安装目录里的 `dsh-uninstall.exe`
+  随目录消失、源码树里的副本被源码树护栏拒绝（exit 2）、`--deferred-pass <dir>` 因缺少安装标记
+  被拒（exit 2），于是「设置 → 应用」的卸载按钮只会报找不到可执行文件。用**残留清理模式**：
+
+  ```powershell
+  .\dsh-uninstall.exe --clean-residue --dry-run   # 先看会清什么（零改动）
+  .\dsh-uninstall.exe --clean-residue             # 清注册表卸载项 + 桌面快捷方式
+  ```
+
+  它**不删除任何文件或目录**（不碰 `%APPDATA%` 用户配置与 `%LOCALAPPDATA%` 运行期数据）；
+  准入要求注册表 `InstallLocation` / `UninstallString` / `DisplayIcon` 三者互相印证，且安装标记
+  **已不存在**（目录仍完整时明确拒绝，要求走正规卸载）。实测：真实悬空状态下 dry-run 零改动 →
+  执行后两处残留被清、`%APPDATA%` 与 `%LOCALAPPDATA%` 文件数逐个不变、重复执行为 no-op。
+
+- **历史与标签（本轮清理后的现状，务必知情）**：v1–v4 的全部内容已从 git 历史中清除 ——
+  仓库现在是**单一提交**（`839fca3`），9 个旧 tag（v1.0.0…v4.2.4）已删除，旧对象已 `gc` 回收。含义：
+
+  * 上面那句「本项目不创建备份、快照、分支或标签 ⇒ 不存在代码侧回滚点」已从**约定**变成
+    **物理事实**：旧版本内容在本机已不可取回；远端 GitHub 上仍留有一份，
+    **在你执行 force-push 之前，那是唯一的退路**；
+  * 被清除的 tag → 提交映射、旧文件清单，记录在那个单提交的**提交信息**里（便于日后审计）；
+  * 联网后补做（本机 github.com 不可达，实测 `git ls-remote` 在 21s 超时）：
+
+    ```powershell
+    git push origin --delete v1.0.0 v2.0.0 v3.0.0 v4.0.0 v4.2.0 v4.2.1 v4.2.2 v4.2.3 v4.2.4
+    git push --force origin main
+    git fetch --prune --tags origin
+    ```
+
+  * 其他机器上的旧克隆仍各自留有旧历史，需要各自重新克隆。
+
 - 发布时若 `D:\DSHLauncher\DSHLauncher.exe` 被运行中的实例锁定，可用**同卷重命名**绕过：
   运行中的映像被以「删除共享」方式锁定——`Rename-Item` 可行，而 `Copy-Item` 覆盖不可行。
   先改名旧产物、再放入新产物即可，**运行中的进程与其托管服务不受影响**。

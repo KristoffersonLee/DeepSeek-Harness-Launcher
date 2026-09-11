@@ -122,6 +122,11 @@ LAN 处置         → 彻底删除（不留开关、不留隔离分支、不留
 
 ### 1.4 环境实测（2026-09-10 逐条验证，非推断）
 
+> ⚠️ 本节是 **2026-09-10** 的快照。此后主工具链已切到由 [`rust-toolchain.toml`](../rust-toolchain.toml)
+> 钉死的 `nightly-2026-09-10`（Cargo build-dir **Layout v2**，`deps\` 与 `.fingerprint\` 消失）。
+> **当前**工具链契约见 [`OPS-RUNBOOK.md`](OPS-RUNBOOK.md) §8 与
+> [`RELEASE-VERIFICATION-v5.0.0-LTS.md`](RELEASE-VERIFICATION-v5.0.0-LTS.md) §11。
+
   项   实测结果   结论  
  --- --- --- 
   Rust   `rustc/cargo 1.98.1`，host `x86_64-pc-windows-msvc`   可用  

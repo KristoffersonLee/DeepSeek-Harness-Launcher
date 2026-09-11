@@ -30,7 +30,7 @@ v5 用 **Rust 从零重写**整个启动器，替换原 C# WinForms 实现。技
 | 强杀后残留子进程 | 可能残留 | **0**（默认服务独立于启动器，强杀启动器不影响它；`tied` 模式由 Job Object 内核级保证） |
 | 端口占用者识别 | WMI + netstat（偶发需管理员） | **GetExtendedTcpTable**（无需管理员） |
 | 日志 IO | 超 2 MB 后逐行全量重写（O(n)） | **append-only 滚动（O(1)）** |
-| 可单测逻辑 | 约 0% | **145 个单元测试**（`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 17 · `dsh-buildinfo` 6；`dsh-core` 零 GUI 依赖） |
+| 可单测逻辑 | 约 0% | **149 个单元测试**（`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 21 · `dsh-buildinfo` 6；`dsh-core` 零 GUI 依赖） |
 
 ### 🏗 架构
 
@@ -82,6 +82,12 @@ v5 **完全移除**局域网共享，相关代码、依赖、配置与 UI 入口
   纯文本同样从该 HTML 提取——指引文案**只有一处来源**
 - **双击图标唤起已有窗口**：第二个实例不再静默退出，而是通过命名事件
   （`Local\DSHLauncher_Activate_v5`）通知首实例把内嵌窗口显示到前台（与 v4 `ShowWindow` 语义一致）
+- **卸载残留清理（`--clean-residue`）**：安装目录已被删除（手工删除 / 磁盘清理 / 安全软件隔离）时，
+  「设置 → 应用」里的卸载按钮只会报找不到可执行文件，而注册表卸载项与桌面快捷方式成了
+  **清不掉的悬空残留**（正规入口都依赖安装目录本身）。该模式只清这两处**磁盘外**残留，
+  **不删除任何文件或目录**（不碰用户配置与运行期数据）；准入要求注册表
+  `InstallLocation` / `UninstallString` / `DisplayIcon` 三者互相印证，且安装标记已不存在。
+  支持 `--dry-run` 先看后删
 
 ### 🛡 发布前审计轮（v5.0.0 定稿前整改）
 
@@ -196,7 +202,7 @@ implementation. See [`TECHNICAL-ROADMAP.md`](TECHNICAL-ROADMAP.md).
 | Orphans after force-kill | possible | **0** (the service is independent of the launcher by default, so force-killing the launcher does not affect it; under `tied` the kernel-level Job Object guarantees it) |
 | Port→PID lookup | WMI + netstat (occasionally needs admin) | **GetExtendedTcpTable** (no admin) |
 | Log IO | full rewrite per line past 2 MB (O(n)) | **append-only rolling (O(1))** |
-| Unit-testable logic | ~0% | **145 unit tests** (`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 17 · `dsh-buildinfo` 6; `dsh-core` has zero GUI deps) |
+| Unit-testable logic | ~0% | **149 unit tests** (`dsh-core` 97 · `dsh-ui` 13 · `dsh-app` 12 · `dsh-uninstall` 21 · `dsh-buildinfo` 6; `dsh-core` has zero GUI deps) |
 
 ### 🗑 Breaking change: LAN sharing fully removed
 
@@ -217,6 +223,13 @@ credentials, firewall rules, the UAC elevation path, the Ollama exposure and the
 - **Settings-page IPC**: the settings buttons now actually work (save / start / stop / open log
   folder / clean archived sessions), with current values prefilled and status echoed back
 - **CLI flags**: `--selftest`, `--settings` / `-s`, `--guide` / `-g`, `--ipc-probe`
+- **Residue cleanup (`--clean-residue`)**: when the install directory was deleted by hand (or by a disk
+  cleaner / AV quarantine), the Uninstall button under Settings → Apps only reports a missing
+  executable, and the registry entry plus the desktop shortcut become leftovers nothing can remove.
+  This mode cleans exactly those two **off-disk** leftovers and **deletes no files or directories**
+  (user config and runtime data untouched); admission requires the registry's `InstallLocation` /
+  `UninstallString` / `DisplayIcon` to agree with each other while the install marker is gone.
+  Supports `--dry-run`
 
 ### 🔧 Fixes & improvements
 
@@ -318,7 +331,10 @@ runtime verification evidence.
 
 - dsh ≥ 0.1.5（任意 dist-tag 通道）；Windows 10/11 64 位；WebView2 Runtime
   （缺失时自动回退 **Edge 精简窗口**，再回退默认浏览器）
-- 构建需要：Rust 工具链（MSVC）+ Windows SDK（`rc.exe` 用于内嵌图标）
+- 构建需要：**由 [`rust-toolchain.toml`](../rust-toolchain.toml) 钉死的 `nightly-2026-09-10`**
+  （含 `clippy` / `rustfmt`；`rustup` 会在首次构建时自动安装）+ Windows SDK（`rc.exe` 用于内嵌图标）。
+  构建缓存采用 Cargo **build-dir Layout v2**；回退到 stable 只需删除该文件 —— 见
+  [`OPS-RUNBOOK.md`](OPS-RUNBOOK.md) §8
 - 配置：v4 的 `%APPDATA%\DSHLauncher\settings.ini` 会在首次启动时**自动迁移**为
   `settings.toml`（仅迁移端口 / 工作目录 / Node 路径 / 托盘选项）
 - **不再需要**：.NET Framework、旁挂 WebView2 DLL、Node 局域网网关
