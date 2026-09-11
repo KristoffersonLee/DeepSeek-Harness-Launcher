@@ -1485,7 +1485,15 @@ if ($null -ne $cleanLayout -and $cleanLayout -match 'CARGO_BUILD_BUILD_DIR' -and
     Add-Issue 'clean.ps1 未识别被搬迁的构建目录：自清洁会漏掉最大的缓存'
 }
 if ($null -ne $cleanLayout -and $cleanLayout -match 'CACHEDIR.TAG' -and $cleanLayout -match 'legacyBuildDirs') {
-    Add-Pass 'clean.ps1 能识别历史遗留的构建目录（CACHEDIR.TAG 判据，避免搬迁实验留下清理死角）'
+    # 还要**保留**这个标记。它不在保留清单里时 `-Cache` 会删掉它，而 cargo 只在**创建**构建目录时
+    # 写它 —— 实测（stable / v2 / CARGO_BUILD_BUILD_DIR 三种配置 cargo 都会写）：被删掉之后
+    # 后续多次 `cargo build` 都不补写，于是上千 MB 缓存会被备份软件照单全收。
+    $keepBlock = [regex]::Match($cleanLayout, '(?s)\$keepRel\s*=\s*@\((.*?)\)').Groups[1].Value
+    if ($keepBlock -match 'CACHEDIR\.TAG') {
+        Add-Pass 'clean.ps1 既用 CACHEDIR.TAG 识别遗留构建目录，也在 -Cache 时保留该标记（cargo 不会补写）'
+    } else {
+        Add-Issue 'clean.ps1 未保留 CACHEDIR.TAG：-Cache 会删掉缓存标记，而 cargo 不会补写（备份软件不再跳过该目录）'
+    }
 } else {
     Add-Issue 'clean.ps1 只认当前生效的构建目录：历史搬迁留下的目录会成为清理死角'
 }

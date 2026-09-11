@@ -17,6 +17,7 @@
 
     `-Cache` 会删掉 target\ 里**除了** release 交付物之外的一切，保留：
         release\dsh-app.exe / dsh-uninstall.exe / 对应 .d / .pdb
+        CACHEDIR.TAG（cargo 写的「这是缓存，备份工具请跳过」标记，见下）
     因为：
       * `docs/FACTS.json` 的 `artifacts.launcher_build` 记录的就是这两个路径与字节数，
         `tools/gen-facts.ps1 -Check` 会与实测比对（删掉 = 事实漂移）；
@@ -88,7 +89,14 @@ $keepRel = @(
     'release\dsh_app.pdb',
     'release\dsh-uninstall.exe',
     'release\dsh-uninstall.d',
-    'release\dsh_uninstall.pdb'
+    'release\dsh_uninstall.pdb',
+    # cargo 在**构建目录根**写的「这是缓存，备份工具请跳过」标记（固定签名，43 字节）。
+    #
+    # 为什么必须保留：它不在清单里时 `-Cache` 会把它删掉，而 cargo **只在创建构建目录时**写它 ——
+    # 实测（stable 旧布局 / 钉死的 nightly v2 / `CARGO_BUILD_BUILD_DIR` 搬迁，三种配置 cargo 都会写）：
+    # 一旦被删，后续多次 `cargo build` **都不会补写**，于是 1.5 GB 缓存会被备份软件照单全收，
+    # 而 `legacyBuildDirs` 的识别判据（见下）在遗留目录上也会失效。
+    'CACHEDIR.TAG'
 )
 $keepFull = @($keepRel | ForEach-Object { (Join-Path $target $_).ToLowerInvariant() })
 
