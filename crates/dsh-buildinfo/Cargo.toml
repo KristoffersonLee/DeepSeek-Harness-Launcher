@@ -1,0 +1,12 @@
+[package]
+name = "dsh-buildinfo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# 说明：本 crate 只被 build.rs 使用（`[build-dependencies]`），不进任何运行时二进制。
+# 抽出来的动机：启动器与卸载器**两个 exe 都必须带版本资源**，而"定位 rc.exe + 生成 .rc +
+# 链接资源"的逻辑有 300 行（Windows SDK 三套布局、架构筛选、版本号校验）。
+# 复制一份等于制造第二处事实来源；放在这里只此一份，且它的单测会被 `cargo test` **真正执行**
+# （放在 build.rs 里的 #[test] 永远不会运行）。
+[dependencies]

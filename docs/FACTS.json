@@ -1,0 +1,49 @@
+{
+  "_generated_by": "tools/gen-facts.ps1（文档数字的唯一来源；请勿手改本文件）",
+  "_note": "docs/*.md 中的指标数字必须与本文件一致（tools/gen-facts.ps1 -Check 会强制校验）",
+  "unit_tests": {
+    "total": 149,
+    "per_crate": {
+      "dsh-core": 97,
+      "dsh-ui": 13,
+      "dsh-app": 12,
+      "dsh-uninstall": 21,
+      "dsh-buildinfo": 6
+    },
+    "build_script": 0
+  },
+  "code_lines": {
+    "rust_production": 12541,
+    "rust_build_rs": 80,
+    "rust_examples": 431,
+    "html": 217,
+    "rust_total": 13052
+  },
+  "artifacts": {
+    "launcher_root": {
+      "path": "DSHLauncher.exe",
+      "bytes": 1087488,
+      "kib": 1062.0,
+      "file_version": "5.0.0",
+      "product_name": "DeepSeek Harness Launcher"
+    },
+    "launcher_build": {
+      "path": "target\\release\\dsh-app.exe",
+      "bytes": 1087488,
+      "kib": 1062.0,
+      "file_version": "5.0.0",
+      "product_name": "DeepSeek Harness Launcher"
+    },
+    "installer": {
+      "path": "DSHLauncherSetup.exe",
+      "bytes": 1637376,
+      "kib": 1599.0,
+      "file_version": "5.0.0.0",
+      "product_name": "DeepSeek Harness Launcher"
+    }
+  },
+  "dependencies": {
+    "lockfile_packages": 266
+  },
+  "consistency_items": 177
+}

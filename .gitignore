@@ -1,0 +1,46 @@
+# 构建产物 / Build artifacts
+# 热替换回退副本（build.ps1 在目标 exe 被占用时把旧产物改名让位）。
+# 注意：正在运行的实例其映像就是这个文件，因此**在启动器退出前删不掉**（Windows 语义）。
+*.bak-*
+*.exe
+*.old*
+selftest.log
+# 由保留的安装包源码 DSHLauncherSetup.cs 生成
+setup.log
+setup.detect.log
+
+# Rust / Cargo
+/target/
+# 被搬迁的构建目录：Cargo 1.91+ 允许把中间产物与最终产物分开
+# （`CARGO_BUILD_BUILD_DIR` / `[build] build-dir`），Cargo 1.100 起的新布局也把中间产物
+# 按包名分桶。二者都可能落在仓库根的其它目录名下，因此这里按仓库约定一并排除。
+/build/
+/build-layout-probe/
+# 布局探针的独立 target 目录（见 tools/verify-build-layout.ps1 第 5 步：探针必须与默认
+# target 隔离，否则会把交付物换成另一个 nightly 编译器的产物）
+/build-layout-probe-nightly/
+**/*.rs.bk
+*.pdb
+# build.rs 在 OUT_DIR 生成的资源文件
+*.res
+
+# WebView2 在 exe 旁生成的数据目录（v5 已显式指定用户数据目录到 %LOCALAPPDATA%，此条防回归）
+*.WebView2/
+
+# 敏感配置（通用防护）
+.env
+.env.*
+
+# 开发期误产物（如 PowerShell 重定向 `> 0` 生成的 “0” 文件）
+0
+
+# WorkBuddy 等工具运行时目录（会按需重建，不入库）
+.workbuddy/
+
+# 编辑器与系统 / Editor & OS
+.vs/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini

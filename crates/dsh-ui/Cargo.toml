@@ -1,0 +1,19 @@
+[package]
+name = "dsh-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+wry.workspace = true
+tao.workspace = true
+tray-icon.workspace = true
+muda.workspace = true
+windows.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+dsh-core.workspace = true
+
+# 说明（依赖清理）：本 crate 只用 `serde_json` 的 `Value` / `json!` 做 IPC 编解码，
+# 从未 `use serde`（也未 derive 任何 Serialize/Deserialize），因此 `serde` 已移除。
+# 判定依据：`grep -n 'serde::\(Derive\|Serialize\|Deserialize\)' crates/dsh-ui/src/*.rs` 无命中。

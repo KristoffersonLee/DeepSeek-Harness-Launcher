@@ -1,0 +1,66 @@
+[workspace]
+members = [
+    "crates/dsh-core",
+    "crates/dsh-ui",
+    "crates/dsh-app",
+    "crates/dsh-uninstall",
+    # 构建期共享库（只被 build.rs 使用）：版本资源/rc.exe 定位的唯一实现
+    "crates/dsh-buildinfo",
+]
+resolver = "2"
+
+[workspace.package]
+version = "5.0.0"
+edition = "2021"
+# 最低支持的 Rust 版本（MSRV）。
+#
+# 依据：源码用到的最新标准库 API 是 `Option::is_none_or`（1.82 稳定）。
+# 声明它可以让更旧的工具链**在解析清单时**给出明确错误，而不是吐出一堆
+# "no method named ..." 的语法噪声（此前没有任何 MSRV 声明）。
+rust-version = "1.82"
+
+[workspace.dependencies]
+# GUI：必须关闭默认 feature，否则拉入 Linux 的 libxdo / gtk / x11 / webkit2gtk
+wry = { version = "0.55.1", default-features = false, features = ["protocol"] }
+tao = { version = "0.35.3", default-features = false, features = ["rwh_06"] }
+tray-icon = { version = "0.24.2", default-features = false }
+muda = { version = "0.19.3", default-features = false }
+
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_Security",                    # 必需：SECURITY_ATTRIBUTES
+    "Win32_System_LibraryLoader",        # 必需：CreateEventW / OpenEventW（单实例唤起）
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_SystemInformation",    # GetLocalTime（日志时间戳）
+    "Win32_System_ProcessStatus",        # QueryFullProcessImageNameW（进程身份判定，防误杀）
+    "Win32_System_Registry",             # RegGetValueW（系统深浅色偏好，窗口初值）
+    "Win32_System_Diagnostics_Debug",    # SetUnhandledExceptionFilter（崩溃取证）
+    "Win32_System_Kernel",               # EXCEPTION_POINTERS（崩溃取证所需类型）
+    "Win32_Storage_FileSystem",          # CreateFileW（崩溃时无分配写日志）
+    "Win32_System_IO",                   # WriteFile（崩溃时无分配写日志）
+    "Win32_System_Console",              # AttachConsole（--build-info 借用父控制台）
+    "Win32_NetworkManagement_IpHelper",  # GetExtendedTcpTable
+    "Win32_Networking_WinSock",          # 必需：AF_INET
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Dwm",                # 注意：不是 Win32_UI_Dwm
+] }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "0.8"
+thiserror = "2.0.20"
+anyhow = "1.0.104"
+dirs = "6.0.0"
+
+dsh-core = { path = "crates/dsh-core" }
+dsh-ui = { path = "crates/dsh-ui" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

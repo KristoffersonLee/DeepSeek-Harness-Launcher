@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# 工具链固定（本仓库的**唯一来源**）
+#
+# ## 为什么主工具链是 nightly
+#
+# 本仓库采用 Cargo 的 **build-dir 新布局（Layout v2）**：中间产物按
+# `target\<profile>\build\<包名>\<哈希>\{out,fingerprint}\` 分桶，`deps\` 与
+# `.fingerprint\` 不再出现（详见 docs/RELEASE-VERIFICATION-v5.0.0-LTS.md §11）。
+# 该布局**目前只在 nightly 提供** —— stable（1.98.1，即当前最新 stable）仍是旧布局 ——
+# 因此要"完整应用 v2"，主工具链必须是 nightly。
+#
+# ## 为什么钉死**带日期**的 nightly，而不是写 `nightly`
+#
+# nightly 每天前进；工具链版本会改变产物字节、rustfmt 的格式化结果与 clippy 的规则集
+# （后者会直接影响 `-D warnings` 门禁）。固定到某一天，`cargo build` 才是可复现的。
+#
+# ## 回退到 stable（一条命令）
+#
+#     Remove-Item rust-toolchain.toml
+#
+# 之后 `cargo` 立刻回到 stable 1.98.1（旧布局 `deps\` + `.fingerprint\`），
+# 无需改动任何源码。完整步骤与注意事项见 docs/OPS-RUNBOOK.md。
+#
+# ## 升级这个钉死版本
+#
+#     rustup toolchain install nightly-YYYY-MM-DD --profile minimal --component clippy,rustfmt
+#     # 改下面的 channel，然后重跑：cargo fmt --all -- --check / clippy / test
+#     #                          / tools\check-consistency.ps1 / selftest.ps1
+#     # 若 fmt 产生 diff 或 clippy 报新 lint，必须当轮处置（不要让门禁带病通过）。
+# ---------------------------------------------------------------------------
+[toolchain]
+channel = "nightly-2026-09-10"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

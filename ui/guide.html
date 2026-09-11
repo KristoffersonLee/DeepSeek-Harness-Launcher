@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新手指引 - DSHLauncher</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; font-size: 14px; color: #333; background: #fff; padding: 24px; line-height: 1.7; }
+        h1 { font-size: 22px; margin-bottom: 20px; color: #1a1a1a; }
+        h2 { font-size: 16px; margin: 20px 0 10px; color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 6px; }
+        p { margin-bottom: 10px; }
+        .section { margin-bottom: 24px; }
+        .shortcut { background: #f8f9fa; padding: 12px; border-radius: 4px; margin: 10px 0; }
+        kbd { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-family: 'Consolas', monospace; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>DSHLauncher 新手指引</h1>
+
+    <div class="section">
+        <h2>一、端口是什么？要不要改？</h2>
+        <p>端口就是电脑给程序开的"门"。DSH Harness 默认使用 3080 端口，浏览器通过 <code>http://127.0.0.1:3080</code> 访问它。</p>
+        <ul>
+            <li>默认不用改，直接用就行；</li>
+            <li>只有一种情况需要改：提示"端口被占用"且占用的不是 Harness 时，换一个数字（比如 3090）；</li>
+            <li>端口范围 1~65535，随便选个没被占用的就行。</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>二、工作目录是什么？怎么选？</h2>
+        <p>工作目录是 Harness"干活"的地方：它在这里保存会话记录，也是它读写文件的范围。</p>
+        <ul>
+            <li>想让它帮忙处理日常文件 → 选桌面（需要你在设置里手动把工作目录填成桌面路径）；</li>
+            <li>想让它专注某个项目 → 选那个项目文件夹；</li>
+            <li>换了目录等于换了一个新工作区，之前的会话不会丢，也不会混在一起。</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>三、环境要求（一般不用管）</h2>
+        <p>启动器会自动检测 Node.js 和 dsh。需要它们时：</p>
+        <ul>
+            <li>安装 Node.js LTS 版本；</li>
+            <li>打开命令行执行：<code>npm install -g @deepseek-ai/dsh</code></li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>四、常见问题</h2>
+        <div class="shortcut">
+            <p><strong>快捷键（在主界面窗口内）：</strong></p>
+            <p><kbd>F5</kbd> / <kbd>Ctrl+R</kbd> — 刷新界面</p>
+            <p><kbd>Esc</kbd> — 按「关闭主界面窗口时最小化到托盘」偏好隐藏或关闭窗口</p>
+        </div>
+        <p>注：本指引窗口与设置窗口不响应上述快捷键（避免影响页面里的输入）。</p>
+        <p>更多问题请查看维护手册。</p>
+    </div>
+</body>
+</html>

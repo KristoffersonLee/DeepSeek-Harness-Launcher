@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DSHLauncher 设置</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; font-size: 14px; color: #333; background: #f5f5f5; }
+        .container { padding: 20px; }
+        h1 { font-size: 18px; margin-bottom: 14px; color: #1a1a1a; }
+        .card { background: #fff; border-radius: 8px; padding: 18px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .card h2 { font-size: 15px; margin-bottom: 12px; color: #1a1a1a; }
+        .field { display: flex; align-items: center; margin-bottom: 11px; gap: 10px; }
+        .field label { width: 92px; color: #666; flex: none; }
+        .field input[type="text"], .field input[type="number"] {
+            flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;
+            font-family: inherit; min-width: 0;
+        }
+        .field input:focus { outline: none; border-color: #4a90d9; }
+        .checkbox { display: flex; align-items: center; gap: 7px; color: #444; }
+        .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+        button { padding: 7px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-family: inherit; background: #4a90d9; color: #fff; }
+        button:hover { background: #357abd; }
+        button.sec { background: #6c757d; }
+        button.sec:hover { background: #545b62; }
+        button:active { transform: translateY(1px); }
+        .status { padding: 9px 12px; border-radius: 4px; background: #e8f5e9; color: #2e7d32; font-size: 13px; margin-bottom: 10px; }
+        .status.error { background: #ffebee; color: #c62828; }
+        .hint { color: #888; font-size: 12px; margin-top: 7px; line-height: 1.6; }
+        code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DSHLauncher 设置</h1>
+
+        <div class="status" id="status">就绪</div>
+
+        <div class="card">
+            <h2>服务</h2>
+            <div class="field">
+                <label>端口</label>
+                <input type="number" id="port" min="1" max="65535" placeholder="3080">
+            </div>
+            <div class="field">
+                <label>工作目录</label>
+                <input type="text" id="workdir" placeholder="留空则使用 dsh 默认">
+            </div>
+            <div class="field">
+                <label>Node 路径</label>
+                <input type="text" id="nodepath" placeholder="留空则自动检测">
+            </div>
+            <div class="field">
+                <label class="checkbox">
+                    <input type="checkbox" id="trayonclose" checked>
+                    关闭<strong>主界面</strong>窗口时最小化到托盘
+                </label>
+            </div>
+            <div class="field">
+                <label class="checkbox">
+                    <input type="checkbox" id="independentservice" checked>
+                    服务独立于启动器（推荐）
+                </label>
+            </div>
+            <div class="row">
+                <button id="saveBtn">保存设置</button>
+                <button id="resetBtn" class="sec">恢复默认设置</button>
+            </div>
+            <div class="hint">
+                修改端口或工作目录并保存后，若服务正在运行会自动以新配置重启。<br>
+                <strong>恢复默认设置</strong>会删除 <code>settings.toml</code> 并恢复出厂默认值，
+                用于配置文件损坏时自救（会先弹确认框）。<br>
+                <strong>服务独立于启动器</strong>（勾选，推荐）：退出 / 崩溃 / 升级启动器都<strong>不会</strong>
+                关闭 dsh，正在进行的会话不中断，下次打开启动器会自动接管；<strong>退出时不再弹确认框</strong>
+                （服务本就无碍）。<br>
+                <strong>取消勾选</strong>：服务随启动器退出而停止（启动器被强杀时由内核回收，不留残留进程）；
+                此时<strong>每次退出都会弹确认框</strong>，避免误退导致会话中断。
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>操作</h2>
+            <div class="row">
+                <button id="startBtn" class="sec">启动服务</button>
+                <button id="stopBtn" class="sec">停止服务</button>
+                <button id="logBtn" class="sec">打开日志目录</button>
+                <button id="cleanBtn" class="sec">清理归档会话</button>
+            </div>
+            <div class="hint">
+                日志文件：<code id="logpath">%LOCALAPPDATA%\DSHLauncher\logs\launcher.log</code><br>
+                「清理归档会话」会先停止 dsh 服务（<strong>正在进行的会话会中断</strong>），
+                删除全部已归档会话的历史数据（<strong>不可恢复</strong>），
+                完成后<strong>自动重新启动服务</strong>；点击时会先弹确认框。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 供 Rust 侧回写状态
+        window.__setStatus = function (payload) {
+            var el = document.getElementById('status');
+            var text = payload && payload.text ? payload.text : '';
+            el.textContent = text;
+            el.className = (payload && payload.error) ? 'status error' : 'status';
+        };
+
+        // 供 Rust 侧回填表单（打开时、以及「恢复默认设置」后都会调用）
+        window.__applyInit = function () {
+            var init = window.__INIT__;
+            if (!init) return;
+            if (init.port) document.getElementById('port').value = init.port;
+            document.getElementById('workdir').value = init.work_dir || '';
+            document.getElementById('nodepath').value = init.node_path || '';
+            document.getElementById('trayonclose').checked = !!init.tray_on_close;
+            // 缺字段（旧版本写入的配置）时按「独立」处理，与服务端默认值一致
+            document.getElementById('independentservice').checked =
+                init.independent_service === undefined ? true : !!init.independent_service;
+            // 日志路径的唯一真值来自 Rust（此前这里是硬编码字符串，可能不符）
+            if (init.log_path) document.getElementById('logpath').textContent = init.log_path;
+        };
+        window.__applyInit();
+
+        function send(action, extra) {
+            if (!window.ipc || !window.ipc.postMessage) {
+                window.__setStatus({ text: '当前环境不支持 IPC（请确认在启动器内打开）', error: true });
+                return;
+            }
+            var msg = Object.assign({ action: action }, extra || {});
+            window.ipc.postMessage(JSON.stringify(msg));
+        }
+
+        document.getElementById('saveBtn').addEventListener('click', function () {
+            send('save', {
+                port: document.getElementById('port').value,
+                workDir: document.getElementById('workdir').value,
+                nodePath: document.getElementById('nodepath').value,
+                trayOnClose: document.getElementById('trayonclose').checked,
+                independentService: document.getElementById('independentservice').checked
+            });
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', function () {
+            if (!window.confirm('确定要恢复默认设置吗？\n\n' +
+                '将删除配置文件 settings.toml：端口、工作目录、Node 路径、托盘偏好全部回到默认值。\n' +
+                '服务是否重启由新配置决定，正在进行的会话可能受影响。')) {
+                return;
+            }
+            window.__setStatus({ text: '正在恢复默认设置…', error: false });
+            send('resetConfig');
+        });
+
+        document.getElementById('startBtn').addEventListener('click', function () {
+            window.__setStatus({ text: '正在启动服务…', error: false });
+            send('start');
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', function () {
+            window.__setStatus({ text: '正在停止服务…', error: false });
+            send('stop');
+        });
+
+        document.getElementById('logBtn').addEventListener('click', function () { send('openLogDir'); });
+        document.getElementById('cleanBtn').addEventListener('click', function () {
+            // 不在这里改状态文字：真正的确认在 Rust 侧的对话框里，
+            // 用户取消时不应让界面显示"正在清理…"
+            send('cleanArchived');
+        });
+    </script>
+</body>
+</html>

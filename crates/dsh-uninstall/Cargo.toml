@@ -1,0 +1,20 @@
+[package]
+name = "dsh-uninstall"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# 说明（依赖最小化）：卸载器只做四件事——读注册表、删注册表项、删文件/目录、结束同目录的
+# 启动器进程。因此：
+#   * `dsh-core` —— 复用 kill_process_tree / process_image_path / is_process_alive
+#     （进程树回收与身份判定的唯一实现，不重写第二份）；
+#   * `windows`   —— 仅 Registry（RegGetValueW / RegDeleteTreeW）、FileSystem
+#     （MoveFileExW + MOVEFILE_DELAY_UNTIL_REBOOT）、Foundation（HKEY 等）；
+#     控制台输出直接用 std（本产物是 console 子系统，不是 GUI）。
+# 刻意不引入 GUI crate / 任何第三方依赖：单文件、可离线构建、体积尽量小。
+[dependencies]
+dsh-core.workspace = true
+windows = { workspace = true }
+
+[build-dependencies]
+dsh-buildinfo = { path = "../dsh-buildinfo" }

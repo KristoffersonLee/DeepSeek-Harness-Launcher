@@ -1,0 +1,30 @@
+[package]
+name = "dsh-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tao.workspace = true
+tray-icon.workspace = true
+muda.workspace = true
+windows.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+# 内部 crate 同样走 workspace 单一来源（否则 `[workspace.dependencies]` 里的这两项
+# 会变成"声明了却没人用" —— Cargo 1.100 起会就此发出 unused_workspace_dependencies 警告）
+dsh-core.workspace = true
+dsh-ui.workspace = true
+
+# 说明（v5.0.0 依赖清理，均由源码扫描证明未使用后移除）：
+#   dirs         —— 全部路径都由 dsh-core 提供（app_data_dir / log_dir / edge_profile_dir）
+#   serde        —— 依赖清理前 `use serde` / `serde::` 出现 0 次
+#   serde_json   —— 同上（IPC 解析在 dsh-ui）
+#   toml         —— 同上（配置读写全在 dsh-core::config）
+#   wry          —— 同上（WebView 只在 dsh-ui 使用）；Cargo.toml 中原有的
+#                   [build-dependencies] windows(仅 SystemServices) 也从未被 build.rs 引用
+
+# 版本资源注入（与卸载器共用同一份实现，见 crates/dsh-buildinfo）
+[build-dependencies]
+dsh-buildinfo = { path = "../dsh-buildinfo" }
