@@ -494,7 +494,7 @@ DRY-RUN：以上为完整影响范围；未改动任何内容。
 | 全量重建 | `build.ps1 release` + `build-setup.ps1` 通过；版本链路 **33/0/0** |
 | **布局证据** | `target\release` 与 `target\debug` 顶层均为 `build / examples / incremental / *.d / *.pdb / *.rlib`；`Test-Path target\release\deps` = **False**、`target\release\.fingerprint` = **False**（debug 树同样 False/False） |
 | `build\` 分桶 | 按包名：`anyhow, bitflags, bytes, cfg-if, cookie, …`（每包 `<哈希>\{out,fingerprint}`） |
-| 产物尺寸 | 启动器 1,078,784 → **1,087,488 B**；卸载器 309,760 → **316,928 B**；安装包 1,618,432 → **1,637,376 B**（nightly 编译 ⇒ `FACTS.json` 已按实测重生成） |
+| 产物尺寸 | 启动器 1,078,784 → **1,087,488 B**；卸载器 309,760 → **316,928 B**；安装包 1,618,432 → **1,641,472 B**（nightly 编译 ⇒ `FACTS.json` 已按实测重生成） |
 
 **自清洁与门禁无需为 v2 改动**（逐条核实，非推断）：
 

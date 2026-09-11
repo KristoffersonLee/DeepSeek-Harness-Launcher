@@ -36,8 +36,8 @@
     },
     "installer": {
       "path": "DSHLauncherSetup.exe",
-      "bytes": 1637376,
-      "kib": 1599.0,
+      "bytes": 1641472,
+      "kib": 1603.0,
       "file_version": "5.0.0.0",
       "product_name": "DeepSeek Harness Launcher"
     }
